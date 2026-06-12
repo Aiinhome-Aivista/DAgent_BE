@@ -156,15 +156,7 @@ def sync_external_database(user_id, connection_id, session_id):
 
     db_type = db_type.lower() if db_type else "mysql"
 
-    if "port" not in external_db or not str(external_db.get("port", "")).strip():
-        external_db["port"] = "5432" if "postgres" in db_type else "3306"
-
-    required_fields = ["host", "port","username", "password", "database"]
-    for field in required_fields:
-        if field not in external_db or not external_db[field]:
-            raise Exception(f"Missing external DB field: {field}")
-
-    # get username from users table
+    # get username from users table first
     user_conn = pymysql.connect(
         host=MYSQL_CONFIG["host"],
         user=MYSQL_CONFIG["user"],
@@ -184,8 +176,162 @@ def sync_external_database(user_id, connection_id, session_id):
         username = email.split("@")[0]
 
     user_conn.close()
-
     user_db_name = new_user_db
+
+    if db_type == 'ftp':
+        import ftplib
+        import os
+        import uuid
+        import pandas as pd
+        from database.config import UPLOAD_FOLDER
+        
+        host       = external_db.get("host", "")
+        port       = int(external_db.get("port", 21))
+        username   = external_db.get("username", "")
+        password   = external_db.get("password", "")
+        remote_dir = external_db.get("remote_dir", "/")
+        passive    = external_db.get("passive_mode", True)
+        
+        ftp = ftplib.FTP()
+        ftp.connect(host, port, timeout=30)
+        ftp.login(username, password)
+        if passive:
+            ftp.set_pasv(True)
+            
+        ftp.cwd(remote_dir)
+        file_list = []
+        
+        def _parse_list(line):
+            parts = line.split()
+            if len(parts) >= 9:
+                name = " ".join(parts[8:])
+                size = parts[4] if parts[4].isdigit() else "0"
+                is_dir = parts[0].startswith("d")
+                file_list.append({"name": name, "size": int(size), "is_dir": is_dir})
+        
+        ftp.retrlines("LIST", _parse_list)
+        files = [f for f in file_list if f.get("name") and not f.get("is_dir")]
+        
+        csv_files = []
+        sql_files = []
+        table_summary = []
+        total_rows = 0
+        total_columns = 0
+        total_size_bytes = 0
+        
+        for file_info in files:
+            fname = file_info["name"]
+            local_path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{fname}")
+            
+            with open(local_path, "wb") as f:
+                ftp.retrbinary(f"RETR {fname}", f.write)
+                
+            size_bytes = os.path.getsize(local_path)
+            total_size_bytes += size_bytes
+            
+            rows = 0
+            cols = 0
+            
+            if fname.lower().endswith(".csv"):
+                csv_files.append(local_path)
+                try:
+                    df_chunk = pd.read_csv(local_path, nrows=0, encoding="latin1", on_bad_lines="skip")
+                    cols = len(df_chunk.columns)
+                    with open(local_path, encoding="latin1") as f_csv:
+                        rows = sum(1 for _ in f_csv) - 1
+                        if rows < 0: rows = 0
+                except:
+                    pass
+            elif fname.lower().endswith(".sql"):
+                sql_files.append(local_path)
+            
+            total_rows += rows
+            total_columns += cols
+            
+            table_summary.append({
+                "table": fname,
+                "rows": rows,
+                "columns": cols
+            })
+            
+        ftp.quit()
+
+        # Log to external_db_sync_log
+        log_conn = pymysql.connect(
+            host=MYSQL_CONFIG["host"],
+            user=MYSQL_CONFIG["user"],
+            password=MYSQL_CONFIG["password"],
+            database=MYSQL_CONFIG["database"]
+        )
+        with log_conn.cursor() as cursor:
+            for summary in table_summary:
+                cursor.execute(f"""
+                    INSERT INTO `{MYSQL_CONFIG["database"]}`.external_db_sync_log
+                    (user_id, new_user_db, username, external_database, table_name, action_type, rows_affected, session_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    user_id,
+                    user_db_name,
+                    username,
+                    external_db.get("name", "FTP Connector"),
+                    summary["table"],
+                    "NEW_TABLE",
+                    summary["rows"],
+                    session_id
+                ))
+            log_conn.commit()
+        log_conn.close()
+        
+        # Schedule the background processing
+        if user_db_name:
+            from controllers.uploads_controller import scheduler as up_scheduler
+            from database.csv_processor import process_csv_job
+            from database.sql_processor import process_sql_job
+            
+            db_user = "aiinhome"
+            db_pass = "Aiin@2026"
+            db_host = "72.61.226.68"
+            db_port = 3306
+
+            if csv_files:
+                up_scheduler.add_job(
+                    func=process_csv_job,
+                    args=[csv_files, user_db_name, db_host, db_user, db_pass, db_port],
+                    trigger='date',
+                    id=str(uuid.uuid4()),
+                    replace_existing=True
+                )
+                
+            if sql_files:
+                up_scheduler.add_job(
+                    func=process_sql_job,
+                    args=[sql_files, user_db_name, db_host, db_user, db_pass, db_port],
+                    trigger='date',
+                    id=str(uuid.uuid4()),
+                    replace_existing=True
+                )
+        
+        data_size_mb = round(total_size_bytes / (1024 * 1024), 2)
+        
+        return {
+            "summary": {
+                "total_rows": total_rows,
+                "total_columns": total_columns,
+                "data_size_mb": data_size_mb,
+                "last_sync": "Just now"
+            },
+            "tables": table_summary,
+            "situations": [],
+            "new_tables": [t["table"] for t in table_summary]
+        }
+
+    if "port" not in external_db or not str(external_db.get("port", "")).strip():
+        external_db["port"] = "5432" if "postgres" in db_type else "3306"
+
+    required_fields = ["host", "port","username", "password", "database"]
+    for field in required_fields:
+        if field not in external_db or not external_db[field]:
+            raise Exception(f"Missing external DB field: {field}")
 
     # check if first sync
     log_conn = pymysql.connect(

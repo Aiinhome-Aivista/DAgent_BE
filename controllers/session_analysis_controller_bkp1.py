@@ -785,7 +785,6 @@ from pyvis.network import Network
 import os
 import uuid
 import re
-# pyrefly: ignore [missing-import]
 from arango import ArangoClient
 from database.config import (
     GRAPH_FOLDER, BASE_URL,
@@ -898,163 +897,279 @@ def detect_cross_source_relationships(table_columns: dict, web_data: list, db_da
                 "brief": (item.get("brief") or "")[:200]
             })
 
+
     prompt = f"""
-You are an expert Knowledge Graph Builder specializing in tyre and automotive parts distribution data.
+    You are an Expert Knowledge Graph Builder and GraphRAG Architect.
 
-Analyze the uploaded sales dataset and generate a RICH, HIERARCHICAL, business-focused Knowledge Graph.
-The graph MUST reflect the full product taxonomy AND all business relationships visible in the data.
+    Analyze the provided sales dataset and generate a business-focused Knowledge Graph suitable for:
 
-## DB Tables and Sample Data:
-{json.dumps(db_summary, indent=2)}
+    1. GraphRAG
+    2. Semantic Search
+    3. Sales Analytics
+    4. Demand Analysis
+    5. Customer Insights
+    6. Product Insights
 
-## Web Data:
-{json.dumps(web_summary, indent=2)}
+    DB Tables and Sample Data:
+    {json.dumps(db_summary, indent=2)}
 
----
+    Web Data:
+    {json.dumps(web_summary, indent=2)}
 
-## MANDATORY GRAPH STRUCTURE
+    =================================================
+    OBJECTIVE
+    =================================================
 
-### LEVEL 1 — Product Category Nodes (CATEGORY column)
-Create one node per unique product category found in the data.
-Known categories in this dataset: Tyre, Tube, Flap, Ret read Belt, Vul. Solution
-Node type: "ProductCategory"
+    Create a business-level knowledge graph.
 
-### LEVEL 2 — Construction Type Nodes (CONSTRUCTION column)
-Create one node per unique construction type found in the data.
-Known construction types: BIAS, RADIAL, BIAS DOT
-Node type: "Construction"
+    Focus on:
 
-MANDATORY EDGES — for every (Category, Construction) combination that exists in the data:
-  (ProductCategory) --[HAS_CONSTRUCTION]--> (Construction)
+    - Company
+    - Zone
+    - Region
+    - Plant
+    - Customer
+    - ProductCategory
+    - Construction
+    - VehicleSegment
+    - Material
+    - BillingType
 
-Example: Tyre → BIAS, Tyre → RADIAL, Tube → BIAS, Tube → RADIAL, Flap → BIAS, Flap → RADIAL
+    =================================================
+    NODE TYPES
+    =================================================
 
-### LEVEL 3 — Tyre/Vehicle Type Nodes (TYRE TYPE column)
-Create one node per unique vehicle/application type found in the data.
-Known types: TRUCK, LCV, CAR, SCV, Motor Cycle, SCOOTER, 3W, JEEP, TRACTOR FRONT, TRACTOR REAR, TRACTOR TRAILER, OTR, INDUSTRIAL
-Node type: "VehicleSegment"
+    Create nodes only for:
 
-MANDATORY EDGES — for every (Construction, TyreType) combination that actually exists in the data:
-  (Construction) --[FITS_VEHICLE]--> (VehicleSegment)
+    - Company
+    - Zone
+    - Region
+    - Plant
+    - Customer
+    - ProductCategory
+    - Construction
+    - VehicleSegment
+    - Material
+    - BillingType
 
-IMPORTANT: Only create edges that actually exist in the data. For example:
-- RADIAL construction connects to: TRUCK, LCV, CAR, SCV (but NOT Motor Cycle, Scooter, 3W — those only appear under BIAS)
-- BIAS construction connects to: TRUCK, LCV, SCV, Motor Cycle, SCOOTER, 3W, JEEP, TRACTOR FRONT, TRACTOR REAR, OTR, INDUSTRIAL
+    =================================================
+    MANDATORY RELATIONSHIPS
+    =================================================
 
-### LEVEL 4 — Billing/Channel Type Nodes (Billing type column)
-Create nodes for each billing channel found in the data.
-Node type: "BillingChannel"
-Known billing types and their business meanings:
-  - ZOR = Standard dealer order
-  - ZBCL = Scheme/claim billing
-  - ZFCL = Free of charge (FOC/sample) billing
-  - ZBFO = Bill & forward billing
-  - ZRDR = Return/debit note
-  - ZCCR = Credit note
-  - ZCC = Cash/counter sale
+    Company
+    - OPERATES_IN -> Zone
 
-MANDATORY EDGES:
-  (ProductCategory) --[SOLD_VIA]--> (BillingChannel)
-Only create these edges for combinations that actually appear in the sample data.
+    Zone
+    - CONTAINS -> Region
 
-### LEVEL 5 — Region and Zone Nodes
-Create Region and Zone nodes from the data.
-Node type: "Region" for region values (e.g., JAIPUR)
-Node type: "Zone" for zone values (e.g., Central)
+    Region
+    - HAS_PLANT -> Plant
 
-MANDATORY EDGES:
-  (Zone) --[CONTAINS]--> (Region)
-  (Region) --[TOP_CATEGORY_IN_REGION]--> (ProductCategory)  [for the highest volume category]
+    Plant
+    - SERVES -> Customer
 
-### LEVEL 6 — Top Material (SKU) Nodes
-From the Material column, identify the TOP 8 most frequently appearing SKUs in the sample data.
-Node type: "Material"
+    Customer
+    - PURCHASED -> ProductCategory
 
-MANDATORY EDGES:
-  (Material) --[BELONGS_TO]--> (ProductCategory)  [based on the category column for that material]
-  (Material) --[HAS_CONSTRUCTION_TYPE]--> (Construction)
-  (Material) --[USED_IN]--> (VehicleSegment)
+    ProductCategory
+    - HAS_CONSTRUCTION -> Construction
 
-### LEVEL 7 — Top Customer/Dealer Nodes
-From the Customer column, identify the TOP 5 most frequently appearing customers in the sample data.
-Node type: "Dealer"
+    Construction
+    - FITS_VEHICLE -> VehicleSegment
 
-MANDATORY EDGES:
-  (Dealer) --[LOCATED_IN]--> (Region)
-  (Dealer) --[PRIMARILY_BUYS]--> (ProductCategory)  [the category with most transactions for this dealer]
+    Material
+    - BELONGS_TO -> ProductCategory
 
----
+    Material
+    - HAS_CONSTRUCTION_TYPE -> Construction
 
-## NUMERICAL PROPERTIES (store as node/edge properties, NEVER as separate nodes)
-- On ProductCategory nodes: total_quantity, total_invoice_value, transaction_count
-- On VehicleSegment nodes: dominant_category (most common product category for this segment)
-- On FITS_VEHICLE edges: transaction_count, avg_invoice_value
-- On SOLD_VIA edges: transaction_count
-- On PRIMARILY_BUYS edges: transaction_count, total_value
+    Material
+    - USED_IN -> VehicleSegment
 
----
+    ProductCategory
+    - SOLD_VIA -> BillingType
 
-## OUTPUT FORMAT
-Return EXACTLY this JSON (no markdown, no extra text):
-{{
-  "nodes": [
-    {{"id": "cat_tyre", "label": "Tyre", "type": "ProductCategory", "properties": {{"transaction_count": 0}}}},
-    {{"id": "cat_tube", "label": "Tube", "type": "ProductCategory", "properties": {{}}}},
-    {{"id": "cat_flap", "label": "Flap", "type": "ProductCategory", "properties": {{}}}},
-    {{"id": "const_bias", "label": "BIAS", "type": "Construction", "properties": {{}}}},
-    {{"id": "const_radial", "label": "RADIAL", "type": "Construction", "properties": {{}}}},
-    {{"id": "seg_truck", "label": "TRUCK", "type": "VehicleSegment", "properties": {{"dominant_category": "Tyre"}}}},
-    {{"id": "seg_car", "label": "CAR", "type": "VehicleSegment", "properties": {{}}}},
-    {{"id": "ch_zor", "label": "ZOR (Standard Order)", "type": "BillingChannel", "properties": {{}}}},
-    {{"id": "reg_jaipur", "label": "JAIPUR", "type": "Region", "properties": {{}}}},
-    {{"id": "zone_central", "label": "Central", "type": "Zone", "properties": {{}}}}
-  ],
-  "edges": [
-    {{"from": "cat_tyre", "to": "const_bias", "label": "HAS_CONSTRUCTION", "properties": {{}}}},
-    {{"from": "cat_tyre", "to": "const_radial", "label": "HAS_CONSTRUCTION", "properties": {{}}}},
-    {{"from": "const_bias", "to": "seg_truck", "label": "FITS_VEHICLE", "properties": {{}}}},
-    {{"from": "const_radial", "to": "seg_car", "label": "FITS_VEHICLE", "properties": {{}}}},
-    {{"from": "cat_tyre", "to": "ch_zor", "label": "SOLD_VIA", "properties": {{}}}},
-    {{"from": "zone_central", "to": "reg_jaipur", "label": "CONTAINS", "properties": {{}}}},
-    {{"from": "reg_jaipur", "to": "cat_tyre", "label": "TOP_CATEGORY_IN_REGION", "properties": {{}}}}
-  ],
-  "identified_node_types": ["ProductCategory", "Construction", "VehicleSegment", "BillingChannel", "Region", "Zone", "Material", "Dealer"],
-  "identified_relationship_types": ["HAS_CONSTRUCTION", "FITS_VEHICLE", "SOLD_VIA", "CONTAINS", "TOP_CATEGORY_IN_REGION", "BELONGS_TO", "HAS_CONSTRUCTION_TYPE", "USED_IN", "LOCATED_IN", "PRIMARILY_BUYS"],
-  "graph_schema": [
-    "(ProductCategory)-[:HAS_CONSTRUCTION]->(Construction)",
-    "(Construction)-[:FITS_VEHICLE]->(VehicleSegment)",
-    "(ProductCategory)-[:SOLD_VIA]->(BillingChannel)",
-    "(Zone)-[:CONTAINS]->(Region)",
-    "(Material)-[:BELONGS_TO]->(ProductCategory)",
-    "(Dealer)-[:PRIMARILY_BUYS]->(ProductCategory)"
-  ],
-  "sample_cypher_queries": [
-    "MATCH (c:ProductCategory)-[:HAS_CONSTRUCTION]->(cn:Construction)-[:FITS_VEHICLE]->(v:VehicleSegment) RETURN c.label, cn.label, v.label",
-    "MATCH (d:Dealer)-[:PRIMARILY_BUYS]->(c:ProductCategory) RETURN d.label, c.label ORDER BY d.transaction_count DESC LIMIT 10",
-    "MATCH (m:Material)-[:USED_IN]->(v:VehicleSegment) WHERE v.label='TRUCK' RETURN m.label"
-  ],
-  "business_insights": [
-    "RADIAL construction dominates CAR and LCV segments while BIAS covers two-wheeler, SCV and tractor segments",
-    "Tyre is the highest-volume ProductCategory, followed by Tube and Flap",
-    "ZOR (standard order) is the primary billing channel, with ZBCL (scheme billing) significant for Tyre category",
-    "TRUCK segment consumes both Tyre, Tube and Flap — all three product categories — making it the most cross-category vehicle type"
-  ],
-  "suggested_graphrag_paths": [
-    "Start from ProductCategory → HAS_CONSTRUCTION → Construction → FITS_VEHICLE → VehicleSegment (full product-to-market path)",
-    "Start from Dealer → PRIMARILY_BUYS → ProductCategory → HAS_CONSTRUCTION → Construction (dealer preference path)",
-    "Start from Zone → CONTAINS → Region → TOP_CATEGORY_IN_REGION → ProductCategory (geographic demand path)"
-  ]
-}}
+    Region
+    - HIGH_DEMAND_FOR -> ProductCategory
 
-## RULES
-1. Use ONLY node IDs you defined in the "nodes" array for "from"/"to" in edges.
-2. Extract actual values from the sample data — do NOT invent SKU codes or customer IDs.
-3. Every ProductCategory node MUST have at least one HAS_CONSTRUCTION edge.
-4. Every Construction node MUST have at least one FITS_VEHICLE edge.
-5. BIAS and RADIAL are different construction types for the SAME categories (Tyre, Tube, Flap) — they are siblings under each category, not children of each other.
-6. Do NOT create a node for every single Material or Customer — only the top 5-8 most frequent ones from the sample.
-7. Node IDs must be unique strings with no spaces (use underscores).
-"""
+    =================================================
+    IMPORTANT MATERIAL RULE
+    =================================================
+
+    Every Material MUST be linked to:
+
+    1. ProductCategory
+    2. Construction
+    3. VehicleSegment
+
+    Example:
+
+    Material
+    -> BELONGS_TO -> ProductCategory
+
+    Material
+    -> HAS_CONSTRUCTION_TYPE -> Construction
+
+    Material
+    -> USED_IN -> VehicleSegment
+
+    This is mandatory.
+
+    =================================================
+    CUSTOMER RULE
+    =================================================
+
+    Create direct relationship:
+
+    Customer
+    -> PURCHASED -> ProductCategory
+
+    Store as edge properties:
+
+    - transaction_count
+    - total_quantity
+    - total_sales
+
+    =================================================
+    REGION DEMAND RULE
+    =================================================
+
+    Create:
+
+    Region
+    -> HIGH_DEMAND_FOR -> ProductCategory
+
+    Store:
+
+    - total_quantity
+    - total_sales
+
+    =================================================
+    NODE PROPERTIES
+    =================================================
+
+    ProductCategory:
+
+    - transaction_count
+    - total_quantity
+    - total_sales
+
+    VehicleSegment:
+
+    - dominant_category
+
+    Material:
+
+    - frequency
+
+    Customer:
+
+    - total_quantity
+    - total_sales
+
+    =================================================
+    EDGE PROPERTIES
+    =================================================
+
+    PURCHASED:
+
+    - transaction_count
+    - total_quantity
+    - total_sales
+
+    HIGH_DEMAND_FOR:
+
+    - total_quantity
+    - total_sales
+
+    FITS_VEHICLE:
+
+    - transaction_count
+
+    SOLD_VIA:
+
+    - transaction_count
+
+    =================================================
+    GRAPHRAG PATHS
+    =================================================
+
+    Generate useful retrieval paths such as:
+
+    Customer -> PURCHASED -> ProductCategory
+
+    ProductCategory -> HAS_CONSTRUCTION -> Construction
+
+    Construction -> FITS_VEHICLE -> VehicleSegment
+
+    Material -> BELONGS_TO -> ProductCategory
+
+    Material -> USED_IN -> VehicleSegment
+
+    Region -> HIGH_DEMAND_FOR -> ProductCategory
+
+    Zone -> CONTAINS -> Region
+
+    =================================================
+    BUSINESS INSIGHTS
+    =================================================
+
+    Generate insights from actual data only.
+
+    Examples:
+
+    - Highest selling category
+    - Highest demand region
+    - Most common vehicle segment
+    - Most used billing channel
+    - Most frequently sold material
+    - Top customer
+
+    =================================================
+    STRICT RULES
+    =================================================
+
+    1. Use only actual values present in the data.
+
+    2. Never invent material codes.
+
+    3. Never invent customer IDs.
+
+    4. Every Material must connect to ProductCategory, Construction and VehicleSegment.
+
+    5. Every edge must reference valid node IDs.
+
+    6. Use unique node IDs.
+
+    7. Do not create nodes for every transaction row.
+
+    8. Do not create nodes for invoice numbers.
+
+    9. Do not create nodes for document numbers.
+
+    10. Return only JSON.
+
+    11. No markdown.
+
+    12. No explanation.
+
+    =================================================
+    OUTPUT FORMAT
+    =================================================
+
+    Return EXACTLY:
+
+    {{
+    "nodes": [],
+    "edges": [],
+    "identified_node_types": [],
+    "identified_relationship_types": [],
+    "graph_schema": [],
+    "sample_cypher_queries": [],
+    "business_insights": [],
+    "suggested_graphrag_paths": []
+    }}
+    """
 
     messages = [{"role": "user", "content": prompt}]
     try:
@@ -1084,18 +1199,19 @@ def generate_session_graph(session_id, web_data, db_data):
     )
 
     type_colors = {
-    "ProductCategory": "#ff4081",   # pink — top-level product
-    "Construction":    "#e040fb",   # purple — construction subtype
-    "VehicleSegment":  "#2979ff",   # blue — end-use vehicle
-    "BillingChannel":  "#00bfa5",   # teal — sales channel
-    "Dealer":          "#ffc107",   # amber — customer/dealer
-    "Region":          "#ff9800",   # orange — geography
-    "Zone":            "#ff6d00",   # deep orange — geography parent
-    "Material":        "#9ccc65",   # green — SKU/product code
-    "Customer":        "#ffc107",   # fallback
-    "Category":        "#ff4081",   # fallback
-    "Date":            "#00bcd4",
-    "Month":           "#18ffff",
+        "Customer": "#ff4081",
+        "Product": "#2979ff",
+        "Dealer": "#00bfa5",
+        "Region": "#ffc107",
+        "Invoice": "#9ccc65",
+        "Material": "#e040fb",
+        "Category": "#ff9800",
+        "Date": "#00bcd4",
+        "Month": "#18ffff",
+        "Year": "#64ffda",
+        "Zone": "#ffd54f",
+        "State": "#ffb74d",
+        "City": "#ff8a65"
     }
 
     table_columns = {}
@@ -1593,26 +1709,9 @@ Analyze the strictly provided business data ({'; '.join(source_desc)}):
 
 {context}
 
-Generate a detailed, purely business-focused summary highlighting key insights. 
-ALSO, generate exactly 5 "What" critical questions about the data.
-ALSO, generate a category-wise trend report as a "line_chart" visualization extracting numeric/categorical trend values.
-
-Return ONLY this JSON:
+Generate a detailed, purely business-focused summary highlighting key insights. Return ONLY this JSON:
 {{
-  "report": "TITLE: <Create a descriptive business-focused title based on the data>\\n\\n<Executive Summary: 3-4 sentences summarizing overall business performance, key trends, and the main takeaway. Do not mention data tables or row counts.>\\n\\n### Key Business Insights\\n\\n- **Overall Performance & Trends**: <Highlight overall metric performance, growth/decline patterns over time, and significant variations>\\n- **Volume Analysis**: <Analyze volume such as high/low periods, increasing/decreasing momentum>\\n- **Time-Based Movements**: <Detail week-wise, month-wise, or date-wise upward/downward movements, peak periods, and lowest periods>\\n- **Anomalies & Spikes**: <Identify sudden spikes, sudden drops, or outlier behavior with corresponding dates or periods>\\n- **Segment Performance**: <Highlight product, category, region, customer, or channel performance based on available data>\\n- **Key Drivers**: <Identify key business drivers and observations derived from the data>\\n\\n### Actionable Recommendations\\n\\n- <Actionable recommendation 1 based on the data>\\n- <Actionable recommendation 2 based on the data>\\n- <Strategic conclusion>",
-  "follow_up_questions": ["What ...?", "What ...?", "What ...?", "What ...?", "What ...?"],
-  "visualizations": [
-    {{
-      "type": "line_chart",
-      "title": "Category-wise Trend Report",
-      "xKey": "category",
-      "yKey": "value",
-      "data": [
-        {{"category": "A", "value": 100}},
-        {{"category": "B", "value": 200}}
-      ]
-    }}
-  ]
+  "report": "TITLE: <Create a descriptive business-focused title based on the data>\\n\\n<Executive Summary: 3-4 sentences summarizing overall business performance, key trends, and the main takeaway. Do not mention data tables or row counts.>\\n\\n### Key Business Insights\\n\\n- **Overall Performance & Trends**: <Highlight overall metric performance, growth/decline patterns over time, and significant variations>\\n- **Volume Analysis**: <Analyze volume such as high/low periods, increasing/decreasing momentum>\\n- **Time-Based Movements**: <Detail week-wise, month-wise, or date-wise upward/downward movements, peak periods, and lowest periods>\\n- **Anomalies & Spikes**: <Identify sudden spikes, sudden drops, or outlier behavior with corresponding dates or periods>\\n- **Segment Performance**: <Highlight product, category, region, customer, or channel performance based on available data>\\n- **Key Drivers**: <Identify key business drivers and observations derived from the data>\\n\\n### Actionable Recommendations\\n\\n- <Actionable recommendation 1 based on the data>\\n- <Actionable recommendation 2 based on the data>\\n- <Strategic conclusion>"
 }}
 
 RULES:
@@ -1726,8 +1825,6 @@ def session_analysis_controller(get_connection_func):
             }), 200
 
         report = analysis.get("report", "")
-        follow_up_questions = analysis.get("follow_up_questions", [])
-        visualizations = analysis.get("visualizations", [])
 
         # 6. Save to cache
         _save_cache(session_id, data_hash, report, graph_url, topics, databases, conn)
@@ -1737,8 +1834,6 @@ def session_analysis_controller(get_connection_func):
             "statusCode": 200,
             "report":     report,
             "graph_url":  graph_url,
-            "follow_up_questions": follow_up_questions,
-            "visualizations": visualizations
         }), 200
 
     except Exception as e:

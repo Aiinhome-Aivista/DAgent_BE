@@ -675,7 +675,7 @@ def get_connection_history_controller(get_db_connection):
 
         # Formatting 1: Add Connections
         for row in raw_history:
-            if row['db_type'] not in ['mysql', 'mssql', 'web_search', 'google_sheets', 'csv_upload', 'csv_chunk_upload','snowflake', 'postgresql', 'postgres', 'sql_upload', 'sql_chunk_upload']:
+            if row['db_type'] not in ['mysql', 'mssql', 'web_search', 'google_sheets', 'csv_upload', 'csv_chunk_upload','snowflake', 'postgresql', 'postgres', 'sql_upload', 'sql_chunk_upload', 'ftp']:
                 continue
 
             date_str = row['created_at'].strftime("%Y-%m-%dT%H:%M:%SZ") if row['created_at'] else ""
@@ -1283,6 +1283,111 @@ Admin
 
     finally:
         if cursor:
+            cursor.close()
+        if db_conn:
+            db_conn.close()
+
+def delete_connection_history_controller(get_db_connection):
+    item_id = request.args.get('id')
+    session_id = request.args.get('session_id')
+        
+    if not item_id:
+        return jsonify({"status": "error", "message": "id is required"}), 400
+    if not session_id:
+        return jsonify({"status": "error", "message": "session_id is required"}), 400
+
+    db_conn = None
+    cursor = None
+    try:
+        db_conn = get_db_connection()
+        cursor = db_conn.cursor(dictionary=True)
+
+        if str(item_id).startswith("topic_group_"):
+            topic = str(item_id).replace("topic_group_", "", 1)
+            cursor.execute("DELETE FROM saved_web_results WHERE session_id = %s AND topic = %s", (session_id, topic))
+            db_conn.commit()
+            return jsonify({"status": "success", "message": "Web search history deleted successfully."}), 200
+
+        # Numeric DB connection
+        cursor.execute("SELECT * FROM connection_history WHERE id = %s AND session_id = %s", (item_id, session_id))
+        conn_history = cursor.fetchone()
+        
+        if not conn_history:
+            return jsonify({"status": "error", "message": "Connection not found."}), 404
+
+        user_id = conn_history["user_id"]
+
+        # Fetch the allocated DB for the user
+        cursor.execute("SELECT new_user_db FROM users WHERE id = %s", (user_id,))
+        user_row = cursor.fetchone()
+        new_user_db = user_row["new_user_db"] if user_row else None
+
+        # Fetch credential to find external database names
+        cursor.execute("SELECT credential FROM database_credential WHERE connection_id = %s", (item_id,))
+        cred_row = cursor.fetchone()
+        
+        external_databases = []
+        if cred_row and cred_row["credential"]:
+            import json
+            try:
+                cred_json = json.loads(cred_row["credential"])
+                if conn_history["db_type"] in ['csv_upload', 'csv_chunk_upload', 'sql_upload', 'sql_chunk_upload']:
+                    files = cred_json.get("files", [])
+                    external_databases.extend(files)
+                elif conn_history["db_type"] == 'ftp':
+                    external_databases.append(cred_json.get("name", "FTP Connector"))
+                else:
+                    db_name = cred_json.get("database")
+                    if db_name:
+                        external_databases.append(db_name)
+            except:
+                pass
+                
+        # Fallback if external_databases is empty
+        if not external_databases and conn_history["db_type"] not in ['csv_upload', 'csv_chunk_upload']:
+             external_databases.append(conn_history["connection_name"])
+
+        # Find tables from sync log
+        tables_to_drop = []
+        if external_databases:
+            format_strings = ','.join(['%s'] * len(external_databases))
+            query = f"SELECT table_name FROM external_db_sync_log WHERE session_id = %s AND external_database IN ({format_strings})"
+            cursor.execute(query, [session_id] + external_databases)
+            sync_logs = cursor.fetchall()
+            for log in sync_logs:
+                if log["table_name"]:
+                    tables_to_drop.append(log["table_name"])
+
+            # Delete from external_db_sync_log
+            delete_log_query = f"DELETE FROM external_db_sync_log WHERE session_id = %s AND external_database IN ({format_strings})"
+            cursor.execute(delete_log_query, [session_id] + external_databases)
+
+        # Connect to new_user_db and drop tables
+        if new_user_db and tables_to_drop:
+            cursor.execute(f"USE `{new_user_db}`")
+            cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+            for table in set(tables_to_drop):
+                cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+            cursor.execute(f"USE `{config.MYSQL_CONFIG['database']}`")
+
+        # Delete credential and connection history
+        cursor.execute("DELETE FROM database_credential WHERE connection_id = %s", (item_id,))
+        cursor.execute("DELETE FROM connection_history WHERE id = %s", (item_id,))
+        
+        db_conn.commit()
+        return jsonify({"status": "success", "message": "Connection and associated tables deleted successfully."}), 200
+
+    except Exception as e:
+        if db_conn:
+            db_conn.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor:
+            try:
+                cursor.execute(f"USE `{config.MYSQL_CONFIG['database']}`")
+            except:
+                pass
             cursor.close()
         if db_conn:
             db_conn.close()

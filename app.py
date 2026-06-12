@@ -13,7 +13,7 @@ for logger_name in ["httpx", "sentence_transformers", "huggingface_hub", "chroma
 
 import os
 import mysql.connector 
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
@@ -67,12 +67,26 @@ from controllers.connector_controllers import (create_connector_controllers,
                                                 get_all_users_controller,
                                                 assign_workspace_users_controller,
                                                 get_workspace_users_controller,
-                                                remove_workspace_user_controller)
+                                                remove_workspace_user_controller,
+                                                delete_connection_history_controller)
 from controllers.session_rag_chat_controller import session_rag_chat_controller
 from controllers.session_sources_controller import session_sources_controller
 from controllers.session_analysis_controller import session_analysis_controller
 from controllers.uploads_controller import upload_chunk_controller, upload_universal_dump_controller , upload_csv_controller
 from controllers.session_chat_history_controller import session_chat_history_controller
+
+
+from controllers.ftp_connector_controller import (
+    ftp_connect_controller,
+    ftp_fetch_controller,
+    ftp_progress_controller,
+    ftp_schedule_controller,
+    ftp_delete_schedule_controller,
+    ftp_get_schedule_controller,
+    ftp_fetch_log_controller,
+)
+
+
 
 from flask_socketio import SocketIO
 app = Flask(__name__)
@@ -318,9 +332,10 @@ def create_db_connectors():
 
 
 # 2. Add the NEW GET route to fetch the history
-@app.route("/connection_history", methods=["GET"])
-def connection_historys():
-    """Returns the history of all database connection attempts"""
+@app.route('/connection_history', methods=['GET', 'DELETE'])
+def connection_history():
+    if request.method == 'DELETE':
+        return delete_connection_history_controller(get_db_connection)
     return get_connection_history_controller(get_db_connection)
 
 @app.route("/workspace_history", methods=["GET"])
@@ -416,6 +431,7 @@ def upload_chunk_controller_route():
     return upload_chunk_controller(get_db_connection)
        
 
+
 from controllers.import_csv_controller import import_csv_data
 from controllers.import_sql_controller import import_sql_data
 
@@ -426,6 +442,43 @@ def import_csv_data_controller():
 @app.route("/import-sql-data", methods=["POST"])
 def import_sql_data_controller():
     return import_sql_data(get_db_connection)
+
+
+# FTP Connector — test & save credentials
+@app.route("/ftp/connect", methods=["POST"])
+def ftp_connect():
+    return ftp_connect_controller(get_db_connection)
+
+# FTP Connector — trigger an immediate fetch (returns job_id)
+@app.route("/ftp/fetch", methods=["POST"])
+def ftp_fetch():
+    return ftp_fetch_controller(get_db_connection)
+
+# FTP Connector — SSE stream for incremental fetch progress
+@app.route("/ftp/progress/<string:job_id>", methods=["GET"])
+def ftp_progress(job_id):
+    return ftp_progress_controller(job_id)
+
+# FTP Connector — create / update a recurring schedule
+@app.route("/ftp/schedule", methods=["POST"])
+def ftp_schedule():
+    return ftp_schedule_controller(get_db_connection)
+
+# FTP Connector — delete / pause a schedule
+@app.route("/ftp/schedule", methods=["DELETE"])
+def ftp_delete_schedule():
+    return ftp_delete_schedule_controller(get_db_connection)
+
+# FTP Connector — get current schedule info
+@app.route("/ftp/schedule", methods=["GET"])
+def ftp_get_schedule():
+    return ftp_get_schedule_controller(get_db_connection)
+
+# FTP Connector — historical fetch log
+@app.route("/ftp/fetch_log", methods=["GET"])
+def ftp_fetch_log():
+    return ftp_fetch_log_controller(get_db_connection)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3019, debug=True, use_reloader=False)

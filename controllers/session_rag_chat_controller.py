@@ -1051,7 +1051,19 @@ def session_rag_chat_controller(get_connection_func):
         return jsonify({"status":"failed","statusCode":400,
                         "message":"session_id is required"}), 400
 
-    if not visit_number:
+    v_raw = visit_number
+    calc_new_visit = False
+    if not v_raw or str(v_raw).lower() in ["new", "session_visit_new"]:
+        calc_new_visit = True
+        visit_number = 1
+    else:
+        try:
+            visit_number = int(str(v_raw).replace("session_visit_", ""))
+        except:
+            calc_new_visit = True
+            visit_number = 1
+
+    if calc_new_visit:
         conn = cur = None
         try:
             conn = get_connection_func()
@@ -1068,11 +1080,6 @@ def session_rag_chat_controller(get_connection_func):
         finally:
             if cur: cur.close()
             if conn: conn.close()
-    else:
-        try:
-            visit_number = int(visit_number)
-        except:
-            visit_number = 1
 
     # Greeting
     if question and _is_greet(question):
@@ -1107,27 +1114,56 @@ def session_rag_chat_controller(get_connection_func):
                         "session_id":session_id,
                         "message":"No data found for this session."}), 200
 
-    # Suggest mode
-    if not question:
+    # Suggest / Default Report mode
+    if not question or question.startswith("default_"):
         count_chunks = [c["text"] for c in all_chunks if c["kind"]=="count"]
         sample = "\n".join(count_chunks)[:15000]
         res = _mistral(SYS, f"""
 Business data summary ({len(all_chunks)} total chunks):
 {sample}
 
-This is a business intelligence assistant. Generate exactly 5 "What" critical questions about the actual business data above.
-ALL 5 questions MUST start with "What ".
-Focus on business-relevant insights: concerns , sudden change in amount or quantity, period wise changes , decrease.
-Use natural, human-readable language. DO NOT mention internal system names, folder names, or long raw database table names (like 'd__project_backend...'). Use terms like 'the data' or 'the records' instead of the raw table name. Refer to actual column values and metrics naturally.
+This is a business intelligence assistant. 
+1. Write a brief "Executive Summary" (3-4 sentences) of the overall data trends.
+2. Generate exactly 5 "What" critical questions about the actual business data above.
+   ALL 5 questions MUST start with "What ". Focus on concerns, sudden changes, or trends.
+   Use natural language. DO NOT mention internal system names or raw tables.
+3. Generate a category-wise trend report as a "line_chart" visualization. Extract numeric/categorical trend values from the chunks.
 
-Return ONLY: {{"suggested_questions":["What ...?","What ...?","What ...?","What ...?","What ...?"]}}
+Return ONLY valid JSON:
+{{
+  "answer": "Executive Summary: ...",
+  "suggested_questions": ["What ...?", "What ...?", "What ...?", "What ...?", "What ...?"],
+  "visualizations": [
+    {{
+      "type": "line_chart",
+      "title": "Category-wise Trend Report",
+      "xKey": "category",
+      "yKey": "value",
+      "data": [
+        {{"category": "A", "value": 100}},
+        {{"category": "B", "value": 200}}
+      ]
+    }}
+  ]
+}}
+
+CRITICAL INSTRUCTIONS FOR VISUALIZATIONS:
+1. The object keys inside the "data" array MUST exactly match what you specify for "xKey" and "yKey".
+2. Only include categories/points that ACTUALLY EXIST in the data. Do NOT invent missing categories with 0 values.
 """)
         if not res:
             return jsonify({"status":"error","statusCode":500,"message":"LLM failed"}), 500
+            
+        viz = res.get("visualizations", [])
+        visualizations = _safe_visualizations(_normalize_visualizations(viz))
+
         return jsonify({
             "status":              "success",
             "statusCode":          200,
-            "suggested_questions": res.get("suggested_questions",[])
+            "answer":              res.get("answer", ""),
+            "suggested_questions": res.get("suggested_questions",[]),
+            "visualizations":      visualizations,
+            "visit_number":        visit_number
         }), 200
 
     # Understand + Retrieve
@@ -1306,6 +1342,10 @@ VISUALIZATION RULES:
 
 If the question involves comparison, distribution, ranking, trends, or category breakdown,
 generate up to 3 visualizations.
+
+CRITICAL INSTRUCTIONS FOR ALL VISUALIZATIONS:
+1. The object keys inside the "data" array MUST exactly match what you specify for "xKey" and "yKey".
+2. Only include categories/points that ACTUALLY EXIST in the data. Do NOT invent missing categories with 0 values.
 
 Supported visualization types:
 
