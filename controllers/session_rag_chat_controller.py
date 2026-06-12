@@ -942,10 +942,17 @@ def _normalize_visualizations(viz_list):
             "title": v.get("title","")
         }
 
+        # if vtype in ("bar_chart","line_chart"):
+
+        #     item["xKey"] = v.get("xKey","")
+        #     item["yKey"] = v.get("yKey","")
+        #     item["data"] = v.get("data",[])
+
         if vtype in ("bar_chart","line_chart"):
 
             item["xKey"] = v.get("xKey","")
             item["yKey"] = v.get("yKey","")
+            item["seriesKey"] = v.get("seriesKey","")
             item["data"] = v.get("data",[])
 
         elif vtype == "pie_chart":
@@ -1183,15 +1190,70 @@ Retrieved business data:
 {hist}Chart request: "{question}"
 
 Extract actual numeric/categorical values ONLY from the chunks.
+--- TREND DETECTION & LINE CHART RULES (MANDATORY CONTRACT) ---
+If the question is trend-related (contains: trend, growth, decline, increase, decrease, over time, monthly, quarterly, yearly, seasonality, pattern, historical analysis, performance over time, month-on-month, MoM, YoY):
+1. Visualization Type MUST be Line Chart ("type": "line_chart").
+2. X-Axis (xKey) MUST be a Date/Month/Year field.
+3. Y-Axis (yKey) MUST be a Numeric Measure.
+4. MUST include "seriesKey": "series" at the visualization root level.
+5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
+   - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
+6. NEVER use Pie Chart or Table as primary visualization for trend queries.
+7. NEVER auto-detect legend. Always use seriesKey.
+8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.
+9. For every line chart row:
+
+REQUIRED FORMAT:
+
+{
+  "month": "...",
+  "invoice_value": 123,
+  "series": "..."
+}
+
+10. NEVER use keys like:
+
+category
+category_construction
+category_type
+group
+legend
+
+Use ONLY:
+
+series
+
+11. If CATEGORY + CONSTRUCTION + TYRE TYPE exists:
+
+series =
+CATEGORY + " - " + CONSTRUCTION + " - " + TYRE_TYPE
+
+Example:
+
+"Tyre - RADIAL - Truck"
+
+12. seriesKey MUST ALWAYS be:
+
+"series"
+------------------------------------------
 {followup_ins}
-Return ONLY:
+Return ONLY valid JSON in this format:
 {{
-  "chart_type":"bar"|"line"|"pie"|"scatter",
-  "title":"...",
-  "labels":[...],
-  "datasets":[{{"label":"...","data":[...]}}],
-  "source_note":"...",
-  "follow_up_questions":[]
+  "follow_up_questions": [],
+  "visualizations": [
+    {{
+      "type": "line_chart",
+      "title": "...",
+      "xKey": "...",
+      "yKey": "...",
+      "seriesKey": "...",
+      "data": [
+        {{ "x_key_name": "...", "y_key_name": 123, "series": "..." }}
+      ]
+    }}
+  ]
 }}
 """)
         if not res:
@@ -1200,39 +1262,7 @@ Return ONLY:
         _advance_turn(session_id)
 
         fuq = res.get("follow_up_questions",[])
-
-        labels = res.get("labels", [])
-        datasets = res.get("datasets", [])
-
-        chart_data = []
-
-        if labels and datasets:
-            values = datasets[0].get("data", [])
-            for l, v in zip(labels, values):
-                x_key = res.get("xKey","label")
-                y_key = res.get("yKey","value")
-
-                chart_data.append({
-                    x_key: l,
-                    y_key: v
-                })
-
-        chart_type = res.get("chart_type","bar")
-
-        if chart_type == "pie":
-            chart_type = "pie_chart"
-        elif chart_type == "bar":
-            chart_type = "bar_chart"
-        elif chart_type == "line":
-            chart_type = "line_chart"
-
-        visualizations = [{
-            "type": chart_type,
-            "title": res.get("title",""),
-            "xKey": res.get("xKey","label"),
-            "yKey": res.get("yKey","value"),
-            "data": chart_data
-        }]
+        visualizations = _safe_visualizations(_normalize_visualizations(res.get("visualizations", [])))
 
         _save_history(
             get_connection_func,
@@ -1342,6 +1372,21 @@ VISUALIZATION RULES:
 
 If the question involves comparison, distribution, ranking, trends, or category breakdown,
 generate up to 3 visualizations.
+
+--- TREND DETECTION & LINE CHART RULES (MANDATORY CONTRACT) ---
+If the question is trend-related (contains: trend, growth, decline, increase, decrease, over time, monthly, quarterly, yearly, seasonality, pattern, historical analysis, performance over time, month-on-month, MoM, YoY):
+1. Visualization Type MUST be Line Chart ("type": "line_chart").
+2. X-Axis (xKey) MUST be a Date/Month/Year field.
+3. Y-Axis (yKey) MUST be a Numeric Measure.
+4. MUST include "seriesKey": "series" at the visualization root level.
+5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
+   - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
+6. NEVER use Pie Chart or Table as primary visualization for trend queries.
+7. NEVER auto-detect legend. Always use seriesKey.
+8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.
+------------------------------------------
 
 CRITICAL INSTRUCTIONS FOR ALL VISUALIZATIONS:
 1. The object keys inside the "data" array MUST exactly match what you specify for "xKey" and "yKey".
