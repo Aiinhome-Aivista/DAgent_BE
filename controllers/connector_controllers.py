@@ -1391,3 +1391,149 @@ def delete_connection_history_controller(get_db_connection):
             cursor.close()
         if db_conn:
             db_conn.close()
+
+
+
+
+# delete_workspace_controller
+def delete_workspace_controller(get_db_connection):
+
+    data = request.get_json()
+    workspace_id = data.get("workspace_id")
+
+    if not workspace_id:
+        return jsonify({
+            "status": "error",
+            "message": "workspace_id is required"
+        }), 400
+
+    db_conn = None
+    cursor = None
+
+    try:
+        db_conn = get_db_connection()
+        cursor = db_conn.cursor(dictionary=True)
+
+        # Get workspace
+        cursor.execute("""
+            SELECT id, session_id
+            FROM workspaces
+            WHERE id = %s
+        """, (workspace_id,))
+
+        workspace = cursor.fetchone()
+
+        if not workspace:
+            return jsonify({
+                "status": "error",
+                "message": "Workspace not found"
+            }), 404
+
+        session_id = workspace["session_id"]
+
+        print(f"Deleting workspace_id={workspace_id}")
+        print(f"session_id={session_id}")
+
+        # 1. Delete ChromaDB Collection
+        try:
+            import hashlib
+            import chromadb
+            import os
+            # Compute the collection name as done in session_rag_chat_controller.py
+            col_name = "s_" + hashlib.md5(session_id.encode()).hexdigest()[:12]
+            # Get persist directory
+            CHROMA_PERSIST_DIR = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_store"
+            )
+            chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+            
+            # Delete if exists
+            try:
+                chroma_client.delete_collection(col_name)
+                print(f"Successfully deleted ChromaDB collection: {col_name}")
+            except Exception as chroma_del_err:
+                print(f"ChromaDB collection {col_name} could not be deleted or does not exist: {chroma_del_err}")
+                
+        except Exception as e:
+            print(f"Error initializing ChromaDB client for deletion: {e}")
+
+        # 2. Delete ArangoDB Data
+        try:
+            from database.config import ARANGO_HOST, ARANGO_USER, ARANGO_PASS, ARANGO_DB
+            from arango import ArangoClient
+            
+            arango_client = ArangoClient(hosts=ARANGO_HOST)
+            sys_db = arango_client.db('_system', username=ARANGO_USER, password=ARANGO_PASS)
+            
+            if sys_db.has_database(ARANGO_DB):
+                arango_db = arango_client.db(ARANGO_DB, username=ARANGO_USER, password=ARANGO_PASS)
+                
+                # Delete Document Collection for this session if it uses session_id as collection name
+                # Or run AQL to delete documents matching this session_id
+                # (Assuming documents have a session_id field based on standard practice)
+                aql_query = f"""
+                FOR doc IN graph
+                    FILTER doc.session_id == '{session_id}'
+                    REMOVE doc IN graph
+                """
+                try:
+                    arango_db.aql.execute(aql_query)
+                    print("Successfully deleted ArangoDB data for session")
+                except Exception as aql_err:
+                    print(f"ArangoDB AQL warning (might not exist): {aql_err}")
+        except Exception as e:
+            print(f"Error connecting to ArangoDB for deletion: {e}")
+
+        # 3. Delete MySQL Records
+        delete_queries = [
+
+            ("DELETE FROM `analyze` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `error_logs` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `graph` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `session_tracking` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `Tracker` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `tracker` WHERE session_name = %s", (session_id,)),
+            ("DELETE FROM `tracker2` WHERE SESSION_NAME = %s", (session_id,)),
+            ("DELETE FROM `unstructured_docs` WHERE session_name = %s", (session_id,)),
+
+            ("DELETE FROM `connection_history` WHERE session_id = %s", (session_id,)),
+            ("DELETE FROM `database_credential` WHERE session_id = %s", (session_id,)),
+            ("DELETE FROM `saved_web_results` WHERE session_id = %s", (session_id,)),
+
+            ("DELETE FROM `workspace_users` WHERE workspace_id = %s", (workspace_id,)),
+            ("DELETE FROM `workspaces` WHERE id = %s", (workspace_id,))
+        ]
+
+        for query, params in delete_queries:
+            try:
+                cursor.execute(query, params)
+            except Exception as e:
+                print(f"FAILED: {query}")
+                print(str(e))
+
+        db_conn.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": "Workspace and all related data deleted successfully"
+        }), 200
+
+    except Exception as e:
+
+        if db_conn:
+            db_conn.rollback()
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if db_conn:
+            db_conn.close()
+
+

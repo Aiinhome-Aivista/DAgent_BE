@@ -58,7 +58,7 @@ from controllers.saved_content_analysis_controller import (
 from controllers.sheet_scan_controller import sheet_scan_controller
 from controllers.sheet_content_controller import sheet_describe_controller, sheet_chat_controller
 from controllers.connector_controllers import (create_connector_controllers,
-                                               agent_query_controllers, create_user_controller,
+                                               agent_query_controllers, create_user_controller, delete_workspace_controller,
                                                get_connection_history_controller,
                                                get_saved_credentials_controller, get_user_workspaces_simple,
                                                get_workspace_history_controller,
@@ -68,12 +68,14 @@ from controllers.connector_controllers import (create_connector_controllers,
                                                 assign_workspace_users_controller,
                                                 get_workspace_users_controller,
                                                 remove_workspace_user_controller,
-                                                delete_connection_history_controller)
+                                                delete_connection_history_controller,
+                                                delete_workspace_controller)
 from controllers.session_rag_chat_controller import session_rag_chat_controller
 from controllers.session_sources_controller import session_sources_controller
 from controllers.session_analysis_controller import session_analysis_controller
 from controllers.uploads_controller import upload_chunk_controller, upload_universal_dump_controller , upload_csv_controller
 from controllers.session_chat_history_controller import session_chat_history_controller
+from controllers.admin_knowledge_controller import admin_get_chats_controller, admin_push_knowledge_controller, admin_get_staged_knowledge_controller, admin_trigger_indexing_controller, admin_set_schedule_controller, admin_get_schedule_controller
 
 
 from controllers.ftp_connector_controller import (
@@ -85,8 +87,7 @@ from controllers.ftp_connector_controller import (
     ftp_get_schedule_controller,
     ftp_fetch_log_controller,
 )
-
-
+from controllers.dashboard_visuals import graph_metrics_controller,extract_graph_data_controller
 
 from flask_socketio import SocketIO
 app = Flask(__name__)
@@ -395,6 +396,33 @@ def upload_universal_dump_route():
 def upload_csv_route():
     return upload_csv_controller(get_db_connection)
 
+
+@app.route('/api/admin/chats', methods=['GET'])
+def admin_chats():
+    return admin_get_chats_controller(get_db_connection)
+
+@app.route('/api/admin/push_to_kg', methods=['POST'])
+def admin_push_kg():
+    return admin_push_knowledge_controller(get_db_connection)
+
+
+@app.route('/api/admin/staged_knowledge', methods=['GET'])
+def admin_staged_knowledge():
+    return admin_get_staged_knowledge_controller(get_db_connection)
+
+@app.route('/api/admin/trigger_indexing', methods=['POST'])
+def admin_trigger_indexing():
+    return admin_trigger_indexing_controller(get_db_connection)
+
+
+@app.route('/api/admin/kg_schedule', methods=['POST'])
+def admin_set_kg_schedule():
+    return admin_set_schedule_controller(get_db_connection)
+
+@app.route('/api/admin/kg_schedule', methods=['GET'])
+def admin_get_kg_schedule():
+    return admin_get_schedule_controller(get_db_connection)
+
 @app.route('/users', methods=['GET'])
 def get_all_users():
     return get_all_users_controller(get_db_connection)
@@ -478,6 +506,21 @@ def ftp_get_schedule():
 @app.route("/ftp/fetch_log", methods=["GET"])
 def ftp_fetch_log():
     return ftp_fetch_log_controller(get_db_connection)
+
+# Workspace Delete
+@app.route('/delete_workspace', methods=['DELETE'])
+def delete_workspace():
+    return delete_workspace_controller(get_db_connection)
+
+
+# Dashboard Visuals 
+@app.route("/graph-metrics", methods=["POST"])
+def graph_metrics():
+    return graph_metrics_controller()
+
+@app.route("/graph-extract-data", methods=["POST"])
+def extract_graph_data():
+    return extract_graph_data_controller()    
 
 
 if __name__ == "__main__":

@@ -64,6 +64,16 @@ def import_csv_data(get_db_connection):
 
         files_in_folder = os.listdir(UPLOAD_DIR)
 
+        # Pre-fetch existing tables and their schemas to enable smart merging
+        user_cursor.execute("SHOW TABLES")
+        existing_tables = [list(row.values())[0] for row in user_cursor.fetchall()]
+        
+        schema_map = {}
+        for t in existing_tables:
+            user_cursor.execute(f"SHOW COLUMNS FROM `{t}`")
+            t_cols = [r['Field'] for r in user_cursor.fetchall()]
+            schema_map[t] = set(t_cols)
+
         for file in files:
             if not file.lower().endswith('.csv'):
                 continue
@@ -78,30 +88,38 @@ def import_csv_data(get_db_connection):
             if df.empty:
                 continue
 
-            df.columns = df.columns.str.strip().str.replace(" ", "_")
+            # Standardize column names: strip whitespace, replace spaces and dots with underscores
+            df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(".", "_", regex=False)
             df = df.where(pd.notnull(df), None)
-
-            table_name = file.replace(".csv", "").lower()
+            df_cols_set = set(df.columns)
             num_columns = len(df.columns)
 
-            cols = ", ".join([f"`{c}` TEXT" for c in df.columns])
-            create_query = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({cols})"
-            user_cursor.execute(create_query)
+            # Check if columns match any existing table (Smart Schema Detection)
+            matched_table = None
+            for t_name, t_cols_set in schema_map.items():
+                if df_cols_set == t_cols_set:
+                    matched_table = t_name
+                    break
 
-            user_cursor.execute(f"SELECT COUNT(*) as cnt FROM `{table_name}`")
-            row_cnt = user_cursor.fetchone()['cnt']
+            # If match found, use that table. Else, create new table named after file.
+            table_name = matched_table if matched_table else file.replace(".csv", "").lower()
 
-            rows_inserted = 0
-            if row_cnt == 0:
-                columns = ", ".join([f"`{c}`" for c in df.columns])
-                placeholders = ", ".join(["%s"] * len(df.columns))
-                insert_query = f"INSERT INTO `{table_name}` ({columns}) VALUES ({placeholders})"
-                
-                data_values = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
-                user_cursor.executemany(insert_query, data_values)
-                rows_inserted = len(df)
-            else:
-                rows_inserted = row_cnt
+            if not matched_table:
+                # Create the new table
+                cols = ", ".join([f"`{c}` TEXT" for c in df.columns])
+                create_query = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({cols})"
+                user_cursor.execute(create_query)
+                # Register in schema_map so subsequent files in this batch can match it
+                schema_map[table_name] = df_cols_set
+
+            # Append the data to the resolved table (unconditional append)
+            columns = ", ".join([f"`{c}`" for c in df.columns])
+            placeholders = ", ".join(["%s"] * len(df.columns))
+            insert_query = f"INSERT INTO `{table_name}` ({columns}) VALUES ({placeholders})"
+            
+            data_values = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
+            user_cursor.executemany(insert_query, data_values)
+            rows_inserted = len(df)
 
             total_rows += rows_inserted
             imported_files.append(file)

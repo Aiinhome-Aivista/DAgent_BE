@@ -665,14 +665,28 @@ def get_chat_history(get_connection_func):
         conn = get_connection_func()
         cur = conn.cursor(dictionary=True)
 
-        # 1. Fetch data from the database
+        # # 1. Fetch data from the database
+        # cur.execute("""
+        #     SELECT id, visit_number, question, answer, follow_up_questions, visualizations
+        #     FROM session_chat_history
+        #     WHERE session_id = %s AND user_id = %s
+        #     ORDER BY turn_index ASC
+        # """, (session_id, int(user_id)))
+       # 1. Fetch data from the database
+        # - Default chats (visit_number = 1) are shared among all users in the workspace
+        # - Private persona queries (visit_number > 1) are strictly filtered by user_id
+        # - If session_id starts with 'def_', it's fully shared
         cur.execute("""
             SELECT id, visit_number, question, answer, follow_up_questions, visualizations
             FROM session_chat_history
-            WHERE session_id = %s AND user_id = %s
-            ORDER BY turn_index ASC
+            WHERE session_id = %s AND (
+                user_id = %s 
+                OR visit_number = 1 
+                OR session_id LIKE 'def_%%'
+            )
+            ORDER BY turn_index ASC, id ASC
         """, (session_id, int(user_id)))
-        
+
         rows = cur.fetchall()
         grouped_sessions = defaultdict(list)
 

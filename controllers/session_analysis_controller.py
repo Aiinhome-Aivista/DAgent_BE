@@ -1580,13 +1580,15 @@ def _call_mistral(context: str, topics: list, databases: list) -> dict:
     if topics:    source_desc.append(f"web topics: {', '.join(topics)}")
     if databases: source_desc.append(f"databases: {', '.join(databases)}")
 
-    system = """You are an expert business analyst and strategist.
-Your task is to analyze the provided data context and extract purely business-focused insights.
+    system = """ IQ200 You are an expert business analyst and strategist.
+Your task is to analyze the provided sales data of different types of tyres, tubes, Ret read Belt, Vul Solutions, flap  and extract purely business-focused insights and context.
 CRITICAL INSTRUCTIONS:
 1. Do NOT include ANY technical details (e.g., table names, column names, row counts, distinct values, data types, schema info, missing values, database structure).
 2. Use ONLY actual values, numbers, and facts from the data provided. DO NOT invent or assume any data.
-3. The report must dynamically adapt to the dataset and focus purely on actionable business insights, performance, and trends.
-4. Respond ONLY in valid JSON with a single key: "report"."""
+3. Identify the key columns in the data such as region, account group, product category, construction, tyre type and summarise the    taxable value, claims, quantity, tatal gst and invoice value.
+4. The report must dynamically adapt to the dataset and focus purely on actionable business insights, performance, and trends.
+5. Respond ONLY in valid JSON with a single key: "report".
+"""
 
     user = f"""
 Analyze the strictly provided business data ({'; '.join(source_desc)}):
