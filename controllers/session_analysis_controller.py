@@ -1585,9 +1585,10 @@ Your task is to analyze the provided sales data of different types of tyres, tub
 CRITICAL INSTRUCTIONS:
 1. Do NOT include ANY technical details (e.g., table names, column names, row counts, distinct values, data types, schema info, missing values, database structure).
 2. Use ONLY actual values, numbers, and facts from the data provided. DO NOT invent or assume any data.
-3. Identify the key columns in the data such as region, account group, product category, construction, tyre type and summarise the    taxable value, claims, quantity, tatal gst and invoice value.
-4. The report must dynamically adapt to the dataset and focus purely on actionable business insights, performance, and trends.
-5. Respond ONLY in valid JSON with a single key: "report".
+3. The column "Customer" means the unique customer, buyer, performer who are categorised or grouped under "Group". The column "Region" means the area or the city where the customer is located. The product type or material type is based on the columns "CATEGORY", "CONSTRUCTION",TYRE TYPE". Total sales, invoice value, revenue, performance should be calculated on the column "Invoice value"
+4. Identify the key columns in the data such as region, account group, product category, construction, tyre type and summarise the    taxable value, claims, quantity, tatal gst and invoice value.
+5. The report must dynamically adapt to the dataset and focus purely on actionable business insights, performance, and trends.
+6. Respond ONLY in valid JSON with a single key: "report".
 """
 
     user = f"""
