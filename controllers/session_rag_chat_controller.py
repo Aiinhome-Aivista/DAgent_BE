@@ -1,22 +1,3 @@
-# # controllers/session_rag_chat_controller.py
-# # ADVANCED HYBRID RAG
-# #
-# # Architecture:
-# #   1. Query Understanding  — extract intent, entities, table hints
-# #   2. Hybrid Retrieval     — BM25 keyword + semantic vector search + metadata filter
-# #   3. Re-ranking           — cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
-# #   4. Answer Generation    — strict grounding, deep business analysis
-# #
-# # Optimizations applied:
-# #   - Global SentenceTransformer model (loaded once at startup)
-# #   - Global CrossEncoder model (loaded once at startup)
-# #   - Embedding cache for repeated queries
-# #   - Batch embedding for multiple queries
-# #   - Duplicate chunk deduplication before ranking
-# #   - Cross-encoder reranking top-40 → keep best 20
-# #   - MAX_CTX_CHARS reduced to 15000 for faster LLM
-# #   - Auto chat history save after every answer
-
 # import re, json, time, hashlib, math, requests, mysql.connector, threading, os
 # try:
 #     import psycopg2
@@ -27,8 +8,8 @@
 #     print("[RAG] psycopg2 not installed — PostgreSQL support disabled")
 # from collections import defaultdict
 # from flask import request, jsonify
-from controllers.intent_router import classify_intent
-from controllers.query_branches import execute_hybrid
+# from controllers.intent_router import classify_intent
+# from controllers.query_branches import execute_hybrid
 # from database.config import MISTRAL_API_KEY, MISTRAL_MODEL, MYSQL_CONFIG
 
 # # ChromaDB persistent storage — vectors survive server restarts
@@ -909,6 +890,9 @@ from controllers.query_branches import execute_hybrid
 # def _is_report(q): return any(k in q.lower() for k in REPORT_KW)
 # def _is_greet(q):  return bool(GREET_RE.match(q.strip()))
 
+# ANALYTICAL_KW = {"top", "highest", "average", "total", "trend", "dashboard", "how many", "sum", "vs", "compare", "lowest", "distribution", "revenue", "sales", "discount", "count", "maximum", "minimum", "profit", "ratio", "fastest", "declining", "percentage"}
+# def _is_analytical(q): return bool(set(q.lower().split()) & ANALYTICAL_KW) or "how many" in q.lower()
+
 # # ─────────────────────────────────────────────
 # # VISUALIZATION SUPPORT
 # # ─────────────────────────────────────────────
@@ -1177,9 +1161,126 @@ from controllers.query_branches import execute_hybrid
 
 #     # Understand + Retrieve
 #     understanding = _understand(question, all_chunks)
-#     context       = _retrieve(all_chunks, bm25_idx, col, question, understanding)
 #     hist          = _history(history)
 #     print(f"[RAG] intent={understanding['intent']} tables={understanding['table_hints']} entities={understanding['entities']}")
+
+#     # NEW ARCHITECTURE: INTENT ROUTER 
+#     intent = classify_intent(question)
+#     print(f"[RAG] Router classified intent: {intent}")
+#     context = ""
+
+#     if intent == "HYBRID":
+#         print("[RAG] HYBRID query detected! AQL/SQL First Then RAG...")
+#         schema_chunks = [c["text"] for c in all_chunks if c["kind"] in ("schema", "count")]
+#         schema_context = "\n".join(schema_chunks)
+#         # 1. AQL First: run execute_hybrid to get specific entity filter
+#         hybrid_entities = execute_hybrid(question, get_connection_func, schema_context)
+#         if hybrid_entities:
+#             print(f"[RAG] Hybrid found targeted entities: {hybrid_entities[:10]}")
+#             # Inject these entities so Vector Search focuses heavily on them
+#             understanding["entities"].extend(hybrid_entities)
+            
+#         # 2. Then RAG
+#         context = _retrieve(all_chunks, bm25_idx, col, question, understanding)
+
+#     elif intent == "INSIGHT":
+#         print("[RAG] INSIGHT query detected! Standard RAG...")
+#         context = _retrieve(all_chunks, bm25_idx, col, question, understanding)
+
+#     # ─────────────────────────────────────────────
+#     # TEXT-TO-SQL (Bypass VectorDB for aggregations)
+#     # ─────────────────────────────────────────────
+#     if intent == "AGGREGATION":
+#         print("⚡ Bypassing VectorDB. Routing to Structured Database (SQL/AQL)...")
+#         schema_chunks = [c["text"] for c in all_chunks if c["kind"] in ("schema", "count")]
+#         schema_context = "\n".join(schema_chunks)
+
+#         sql_sys = """You are an expert Data Analyst & SQL Generator.
+# Your task is to generate a valid SQL query to answer the business question based ONLY on the provided schemas.
+# Return ONLY valid JSON in this exact format:
+# {
+#   "db": "database_name_here (leave empty if sheet_ table)",
+#   "sql": "SELECT ...",
+#   "reasoning": "Brief explanation"
+# }
+# Rules:
+# 1. CRITICAL: Copy table and column names EXACTLY as they appear in the [SCHEMA] chunk. You MUST ALWAYS wrap every column name in backticks (e.g., `Billing_doc._date`) to prevent syntax errors caused by spaces or dots. Do NOT use unescaped aliases like `j.Billing_doc._date`.
+# 2. CRITICAL MATCHING: You MUST check the [COUNT] lines to see which column holds which values. For example, if the user asks for "truck", look at the [COUNT] lists to find "TRUCK" (which is in `TYRE_TYPE`, not `CATEGORY`). If the user asks for "radial", find "RADIAL" (which is in `CONSTRUCTION`, not `TYRE_TYPE`). Do NOT mix up the columns!
+# 3. CRITICAL CASING: When filtering using WHERE clauses, use the EXACT casing for string values as shown in the [COUNT] lists (e.g., 'RADIAL' instead of 'Radial', 'TRUCK' instead of 'Truck', 'Tyre' instead of 'tyre').
+# 4. ALWAYS use proper aggregations (SUM, AVG, COUNT, MAX, MIN) and GROUP BY. CRITICAL: MySQL uses sql_mode=only_full_group_by. If you use an aggregate function (like COUNT), EVERY other selected column MUST be in the GROUP BY clause, or wrapped in an aggregate function like MAX(). Do NOT select non-aggregated columns alongside aggregated ones without grouping by them!
+# 5. If the question asks for 'Top', use ORDER BY ... DESC LIMIT ... If grouping by a date or month for trends, you MUST use ORDER BY on the date field ASC so time-series results are perfectly chronological (e.g., April, May, June).
+# 6. DIALECT RULES: If the schema is MySQL, you MUST use valid MySQL syntax. Do NOT use PostgreSQL functions like `DATE_TRUNC` or `INTERVAL '1 month'`. For monthly grouping in MySQL, if the date is a string like 'DD-MM-YYYY', you MUST parse it first using `STR_TO_DATE(date_col, '%d-%m-%Y')` before grouping or formatting (e.g. `DATE_FORMAT(STR_TO_DATE(date_col, '%d-%m-%Y'), '%Y-%m')`). Always use backticks for escaping.
+# 7. INTERSECTION & PERCENTAGES: To calculate the percentage of entities that meet multiple conditions (e.g., bought BOTH X and Y), use a subquery to aggregate conditions per entity, then calculate the percentage in the outer query. Example: `SELECT SUM(CASE WHEN c_x > 0 AND c_y > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) FROM (SELECT entity_id, SUM(CASE WHEN col='X' THEN 1 ELSE 0 END) AS c_x, SUM(CASE WHEN col='Y' THEN 1 ELSE 0 END) AS c_y FROM table GROUP BY entity_id) AS sub;`
+# 8. SIMPLICITY: Write the simplest possible SQL query. Do NOT use deeply nested JOINs or subqueries inside CASE statements. Never alias an IN() subquery. Provide a safe, read-only query.
+# 9. The column "Customer" means the unique customer, buyer, performer who are categorised or grouped under "Group". The column "Region" means the area or the city where the customer is located. The product type or material type is based on the columns "CATEGORY", "CONSTRUCTION",TYRE TYPE". Total sales, invoice value, revenue, performance should be calculated on the column "Invoice value"
+# """
+#         sql_user = f"Schemas available:\n{schema_context}\n\nQuestion: {question}"
+#         sql_json = _mistral(sql_sys, sql_user)
+
+#         if sql_json and sql_json.get("sql"):
+#             target_db = sql_json.get("db", "").strip()
+#             sql_query = sql_json.get("sql", "").strip()
+#             print(f"[SQL_GEN] db: {target_db} | sql: {sql_query}")
+
+#             conn_sql = cur_sql = None
+#             sql_results = []
+#             try:
+#                 # Determine connection
+#                 if not target_db:
+#                     conn_sql = get_connection_func()
+#                     cur_sql = conn_sql.cursor(dictionary=True)
+#                 else:
+#                     try:
+#                         conn_sql = mysql.connector.connect(
+#                             host=MYSQL_CONFIG["host"], port=MYSQL_CONFIG["port"],
+#                             user=MYSQL_CONFIG["user"], password=MYSQL_CONFIG["password"],
+#                             database=target_db, connection_timeout=10)
+#                         cur_sql = conn_sql.cursor(dictionary=True)
+#                     except Exception as e:
+#                         print(f"[SQL_GEN] MySQL failed, trying Postgres: {e}")
+#                         if PSYCOPG2_AVAILABLE:
+#                             temp_conn = get_connection_func()
+#                             temp_cur = temp_conn.cursor(dictionary=True)
+#                             temp_cur.execute("SELECT credential FROM database_credential WHERE session_id=%s AND db_type IN ('postgresql', 'postgres')", (session_id,))
+#                             pg_rows = temp_cur.fetchall()
+#                             temp_cur.close()
+#                             temp_conn.close()
+                            
+#                             for r in pg_rows:
+#                                 cred = json.loads(r["credential"]) if isinstance(r["credential"], str) else r["credential"]
+#                                 if cred.get("database") == target_db:
+#                                     conn_sql = psycopg2.connect(
+#                                         host=cred.get("host"), port=cred.get("port", 5432),
+#                                         user=cred.get("username"), password=cred.get("password"),
+#                                         dbname=target_db, connect_timeout=10)
+#                                     cur_sql = conn_sql.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+#                                     break
+                
+#                 if cur_sql:
+#                     cur_sql.execute(sql_query)
+#                     rows = cur_sql.fetchall()
+#                     sql_results = [dict(r) for r in rows]
+                    
+#                     # Convert non-serializable objects to string
+#                     for row in sql_results:
+#                         for k, v in row.items():
+#                             if v is not None and not isinstance(v, (str, int, float, bool)):
+#                                 row[k] = str(v)
+                                
+#                     print(f"[SQL_EXEC] Success! Returned {len(sql_results)} rows.")
+#             except Exception as e:
+#                 print(f"[SQL_EXEC] Execution failed: {e}")
+#             finally:
+#                 if cur_sql: 
+#                     try: cur_sql.close() 
+#                     except: pass
+#                 if conn_sql: 
+#                     try: conn_sql.close() 
+#                     except: pass
+
+#             if sql_results:
+#                 # Override context with SQL results for final LLM generation
+#                 context = f"SQL Query executed: {sql_query}\n\nSQL Results:\n" + json.dumps(sql_results, indent=2)
 
 #     # Graph
 #     if _is_graph(question):
@@ -1191,7 +1292,7 @@ from controllers.query_branches import execute_hybrid
 
 # {hist}Chart request: "{question}"
 
-# Extract actual numeric/categorical values ONLY from the chunks.
+# Extract actual numeric/categorical values ONLY from the data above.
 # --- TREND DETECTION & LINE CHART RULES (MANDATORY CONTRACT) ---
 # If the question is trend-related (contains: trend, growth, decline, increase, decrease, over time, monthly, quarterly, yearly, seasonality, pattern, historical analysis, performance over time, month-on-month, MoM, YoY):
 # 1. Visualization Type MUST be Line Chart ("type": "line_chart").
@@ -1302,7 +1403,7 @@ from controllers.query_branches import execute_hybrid
 
 # {hist}Report request: "{question}"
 
-# Write an analytical business report using ONLY the chunks above.
+# Write an analytical business report using ONLY the data above.
 # Be specific — use actual numbers, names, values from the data.
 # {followup_ins}
 # Return ONLY:
@@ -1346,7 +1447,7 @@ from controllers.query_branches import execute_hybrid
 # You are an advanced business intelligence AI — like Claude or GPT — specialized in analyzing actual business database records.
 # This is NOT a general chatbot. Every answer must be grounded in the business data provided below.
 
-# Retrieved data chunks (read ALL carefully):
+# Retrieved data (read ALL carefully):
 # {context}
 
 # {hist}Business Question: "{question}"
@@ -1356,11 +1457,11 @@ from controllers.query_branches import execute_hybrid
 
 # {multi_hint}
 # DEEP ANALYSIS PROTOCOL:
-# 1. Exhaustively scan every chunk — extract ALL relevant business facts.
-# 2. Counts/Totals → [COUNT] chunks are authoritative (e.g. "Number of recipe_users: 12").
-# 3. Complete lists → [COUNT] "All values of column:" lines.
-# 4. User/entity activity → [JOIN] chunks show cross-table relationships.
-# 5. Time patterns → compare timestamps in [ROW] chunks to find trends.
+# 1. Exhaustively scan every piece of data — extract ALL relevant business facts.
+# 2. If SQL execution results are present, use them as authoritative data.
+# 3. If counts/totals are provided in [COUNT] formats, use them.
+# 4. User/entity activity → look for cross-table relationships.
+# 5. Time patterns → compare timestamps to find trends.
 # 6. Business logic → reason about WHY data looks the way it does.
 # 7. Write a COMPREHENSIVE, analyst-grade answer:
 #    - Start with the direct answer to the question.
@@ -1375,6 +1476,12 @@ from controllers.query_branches import execute_hybrid
 
 # If the question involves comparison, distribution, ranking, trends, or category breakdown,
 # generate up to 3 visualizations.
+
+# --- AGGREGATION VISUALIZATION RULES (MANDATORY CONTRACT) ---
+# If the question involves aggregate data (e.g., rankings, sums, counts, "Top N"):
+# 1. You MUST ALWAYS include a Table visualization ("type": "table") to display the exact numerical data.
+# 2. You MUST ALSO include a Line Chart ("type": "line_chart") to visualize the comparison.
+# 3. NEVER return just a bar chart alone for aggregate data; always include the Table and Line Graph.
 
 # --- TREND DETECTION & LINE CHART RULES (MANDATORY CONTRACT) ---
 # If the question is trend-related (contains: trend, growth, decline, increase, decrease, over time, monthly, quarterly, yearly, seasonality, pattern, historical analysis, performance over time, month-on-month, MoM, YoY):
@@ -1480,24 +1587,6 @@ from controllers.query_branches import execute_hybrid
 
 
 
-# controllers/session_rag_chat_controller.py
-# ADVANCED HYBRID RAG
-#
-# Architecture:
-#   1. Query Understanding  — extract intent, entities, table hints
-#   2. Hybrid Retrieval     — BM25 keyword + semantic vector search + metadata filter
-#   3. Re-ranking           — cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
-#   4. Answer Generation    — strict grounding, deep business analysis
-#
-# Optimizations applied:
-#   - Global SentenceTransformer model (loaded once at startup)
-#   - Global CrossEncoder model (loaded once at startup)
-#   - Embedding cache for repeated queries
-#   - Batch embedding for multiple queries
-#   - Duplicate chunk deduplication before ranking
-#   - Cross-encoder reranking top-40 → keep best 20
-#   - MAX_CTX_CHARS reduced to 15000 for faster LLM
-#   - Auto chat history save after every answer
 
 import re, json, time, hashlib, math, requests, mysql.connector, threading, os
 try:
@@ -2347,9 +2436,10 @@ def _save_history(get_fn, session_id, user_id, question, answer, follow_ups, int
 from model.llm_client import call_llm_chat
 
 def _mistral(system, user, retries=2):
-    # Trim if too long to prevent token overflow
+    # Trim from the middle if too long, preserving both context start and prompt instructions at the end
     if len(user) > 28000:
-        user = user[:28000] + "\n\n[...context trimmed for token limit...]"
+        half = 13500
+        user = user[:half] + "\n\n[...context trimmed for token limit...]\n\n" + user[-half:]
         print(f"[LLM] prompt trimmed")
         
     messages = [
@@ -2522,7 +2612,7 @@ DEEP ANALYSIS RULES:
 6. For TREND questions: compare timestamps, sequences, values across [ROW] chunks.
 7. For COMPARISON questions: pull data from multiple tables and compare side by side.
 8. For DEEP questions: combine ROW + JOIN + COUNT chunks to give comprehensive multi-part answers.
-9. NEVER say "I could not find" if ANY relevant data exists — dig deeper into chunks.
+9. CRITICAL: If the requested data (e.g. specific columns or metrics) does NOT exist in the context, clearly state that it is unavailable. NEVER hallucinate or invent fake names, metrics, or records.
 10. Always answer in full sentences with specifics — no vague responses.
 11. DO NOT include source citations in the answer text — keep answer clean.
 12. follow_up_questions MUST follow the EXACT format specified in the user prompt.
@@ -2705,7 +2795,7 @@ Return ONLY valid JSON in this exact format:
   "reasoning": "Brief explanation"
 }
 Rules:
-1. CRITICAL: Copy table and column names EXACTLY as they appear in the [SCHEMA] chunk. You MUST ALWAYS wrap every column name in backticks (e.g., `Billing_doc._date`) to prevent syntax errors caused by spaces or dots. Do NOT use unescaped aliases like `j.Billing_doc._date`.
+1. CRITICAL: Copy table and column names EXACTLY as they appear in the [SCHEMA] chunk, INCLUDING ANY TRAILING UNDERSCORES (e.g., `table_name_`). Do NOT "auto-correct" or remove trailing underscores from table names. You MUST ALWAYS wrap every column name in backticks (e.g., `Billing_doc._date`) to prevent syntax errors caused by spaces or dots. Do NOT use unescaped aliases like `j.Billing_doc._date`.
 2. CRITICAL MATCHING: You MUST check the [COUNT] lines to see which column holds which values. For example, if the user asks for "truck", look at the [COUNT] lists to find "TRUCK" (which is in `TYRE_TYPE`, not `CATEGORY`). If the user asks for "radial", find "RADIAL" (which is in `CONSTRUCTION`, not `TYRE_TYPE`). Do NOT mix up the columns!
 3. CRITICAL CASING: When filtering using WHERE clauses, use the EXACT casing for string values as shown in the [COUNT] lists (e.g., 'RADIAL' instead of 'Radial', 'TRUCK' instead of 'Truck', 'Tyre' instead of 'tyre').
 4. ALWAYS use proper aggregations (SUM, AVG, COUNT, MAX, MIN) and GROUP BY. CRITICAL: MySQL uses sql_mode=only_full_group_by. If you use an aggregate function (like COUNT), EVERY other selected column MUST be in the GROUP BY clause, or wrapped in an aggregate function like MAX(). Do NOT select non-aggregated columns alongside aggregated ones without grouping by them!
@@ -2846,7 +2936,8 @@ Example:
 {followup_ins}
 Return ONLY valid JSON in this format:
 {{
-  "follow_up_questions": [],
+  "answer": "A short analytical summary of the chart and trends shown.",
+  "follow_up_questions": ["Question 1", "Question 2"],
   "visualizations": [
     {{
       "type": "line_chart",
@@ -2866,7 +2957,15 @@ Return ONLY valid JSON in this format:
 
         _advance_turn(session_id)
 
-        fuq = res.get("follow_up_questions",[])
+        fuq_raw = res.get("follow_up_questions",[])
+        fuq = []
+        if isinstance(fuq_raw, list):
+            for q in fuq_raw:
+                if isinstance(q, dict) and "question" in q:
+                    fuq.append(q["question"])
+                elif isinstance(q, str):
+                    fuq.append(q)
+                    
         visualizations = _safe_visualizations(_normalize_visualizations(res.get("visualizations", [])))
 
         _save_history(
@@ -2885,7 +2984,7 @@ Return ONLY valid JSON in this format:
         return jsonify({
             "status": "success",
             "statusCode": 200,
-            "answer": "",
+            "answer": res.get("answer", "Here is the visualization for your request."),
             "follow_up_questions": fuq,
             "visualizations": visualizations,
             "visit_number": visit_number
