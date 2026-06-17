@@ -1,4 +1,3 @@
-
 import re, json, time, hashlib, math, requests, mysql.connector, threading, os
 try:
     import psycopg2
@@ -850,7 +849,7 @@ def _save_history(get_fn, session_id, user_id, question, answer, follow_ups, int
 
 from model.llm_client import call_llm_chat
 
-def _mistral(system, user, retries=2):
+def _mistral(system, user, retries=2, temperature=0.15):
     # Trim from the middle if too long, preserving both context start and prompt instructions at the end
     if len(user) > 28000:
         half = 13500
@@ -864,7 +863,7 @@ def _mistral(system, user, retries=2):
     
     for attempt in range(retries + 1):
         try:
-            response = call_llm_chat(messages, json_mode=True, temperature=0.15)
+            response = call_llm_chat(messages, json_mode=True, temperature=temperature)
             if response:
                 if response.startswith("[LLM Error]"):
                     raise Exception(response)
@@ -1197,15 +1196,62 @@ CRITICAL INSTRUCTIONS FOR VISUALIZATIONS:
     # TEXT-TO-SQL (Bypass VectorDB for aggregations)
     # ─────────────────────────────────────────────
     if intent == "AGGREGATION":
-        print("⚡ Bypassing VectorDB. Routing to Structured Database (SQL/AQL)...")
+        print(" Bypassing VectorDB. Routing to Structured Database (SQL/AQL)...")
         schema_chunks = [c["text"] for c in all_chunks if c["kind"] in ("schema", "count")]
         schema_context = "\n".join(schema_chunks)
 
+        # ─────────────────────────────────────────────
+        # 1. CANONICALIZATION STEP
+        # ─────────────────────────────────────────────
+        canon_sys = """You are a Query Canonicalizer for Business Intelligence.
+Convert the user's natural language question into a structured JSON representation (Canonical Query).
+Do not generate SQL yet. Extract the core analytical components.
+
+Return ONLY a JSON object in this format:
+{
+  "analytical_intent": "e.g., dealer_ranking, sales_trend, total_revenue",
+  "metric": "e.g., sales, volume, discount",
+  "aggregation": "e.g., sum, count, avg",
+  "sort": "e.g., desc, asc",
+  "limit": 5
+}
+If a component is missing from the user's question, set it to null.
+"""
+        canon_json = _mistral(canon_sys, f"Natural Language Question: {question}", temperature=0.0)
+        canonical_query_str = json.dumps(canon_json, indent=2) if canon_json else f'{{"raw_question": "{question}"}}'
+        print(f"[CANONICAL_QUERY] {canonical_query_str}")
+
+        # ─────────────────────────────────────────────
+        # 2. SQL GENERATION STEP
+        # ─────────────────────────────────────────────
         sql_sys = """You are a Senior Data Analyst, SQL Expert, and Business Intelligence Assistant.
 
 PRIMARY OBJECTIVE
 
 Generate SQL that computes answers from the FULL DATASET.
+
+BUSINESS DEFINITIONS
+- Dealer = Customer
+- Sales = SUM(invoice_value)
+- Revenue = SUM(invoice_value)
+- Volume = SUM(qty)
+- Net Sales = SUM(invoice_value) - SUM(total_discount)
+- Invoice Count = COUNT(DISTINCT invoice_number)
+- Product = Material
+- Top Dealer = Dealer ranked by Sales descending
+- Worst Dealer = Dealer ranked by Sales ascending
+- Best Performing Dealer = Dealer ranked by Sales descending
+- Lowest Performing Dealer = Dealer ranked by Sales ascending
+- Top Product = Product ranked by Sales descending
+- Worst Product = Product ranked by Sales ascending
+- Region Performance = SUM(invoice_value) grouped by region
+- Zone Performance = SUM(invoice_value) grouped by zone
+- Average Realization = SUM(invoice_value) / NULLIF(SUM(qty),0)
+
+METRIC PRIORITY
+- Whenever user asks: "Top Dealer", "Best Dealer", "Leading Dealer" -> Use: SUM(invoice_value)
+- Whenever user asks: "Worst Dealer", "Lowest Dealer", "Poor Performing Dealer" -> Use: SUM(invoice_value)
+- Never use: qty, taxable_value, gst, discount unless explicitly requested.
 
 DATA RELIABILITY RULES
 
@@ -1235,20 +1281,22 @@ Do not add monthly, yearly, trend, or detailed breakdowns unless explicitly requ
 6. Never generate SQL that ranks monthly rows directly using:
    LIMIT N after GROUP BY month.
 
-7. If the question is:
-
-   * Top N dealers monthwise
-   * Top N customers monthwise
-   * Best performers trend
-   * Worst performers trend
-
-   Then:
-
-   Step 1:
-   Find Top/Bottom N entities across the full dataset.
-
-   Step 2:
-   Return monthwise results only for those entities.
+7. If the question asks for Top N entities (e.g., dealers, customers) month-wise or trend:
+   NEVER use `IN (SELECT ... LIMIT N)` because MySQL does not support LIMIT inside IN subqueries.
+   Instead, you MUST use a JOIN with a derived table:
+   
+   SELECT t.entity, DATE_FORMAT(STR_TO_DATE(t.date_col, '%Y-%m-%d'), '%Y-%m') as month, SUM(t.metric) as total_sales
+   FROM `table` t
+   JOIN (
+       SELECT entity FROM `table`
+       GROUP BY entity
+       ORDER BY SUM(metric) DESC
+       LIMIT 2
+   ) as top_entities ON t.entity = top_entities.entity
+   GROUP BY t.entity, month
+   ORDER BY top_entities.total_sales DESC, month;
+   
+   Adjust the DATE_FORMAT and STR_TO_DATE depending on the actual date format in the table.
 
 8. Use:
    SUM()
@@ -1269,6 +1317,49 @@ Do not add monthly, yearly, trend, or detailed breakdowns unless explicitly requ
 
 12. Never hallucinate business results.
 
+13. PRESERVE EXACT DECIMALS: Never round monetary values in SQL unless explicitly asked. Return the exact sum with decimals intact.
+
+COLUMN HYGIENE
+- All numeric columns (sales, invoice_value, quantity, discount, tax) are strictly typed as DECIMAL or BIGINT in the database.
+- DO NOT use CAST or REGEXP_REPLACE or REPLACE to clean numeric columns. Just use SUM(`col`).
+- ONLY format strings if the column is explicitly a string format, but numeric columns are already typed.
+
+PER-GROUP TOP-N — "CATEGORY-WISE", "PER", "EACH", "BY X", "X-WISE"
+
+- "Top N customers per category", "category wise top N", "best N per region",
+  "top N dealers for each zone" all mean: rank WITHIN each group and keep N rows
+  from EVERY group. NEVER answer these with a single global ORDER BY ... LIMIT N
+  (that returns only the N biggest pairs overall, not N per group).
+- Use a window function partitioned by the group:
+      WITH agg AS (
+        SELECT `<group_col>` AS grp, `<entity_col>` AS entity,
+               SUM(`<value_col>`) AS metric
+        FROM `<fact>` JOIN `<dim>` ON ...
+        GROUP BY `<group_col>`, `<entity_col>`
+      ),
+      ranked AS (
+        SELECT grp, entity, metric,
+               ROW_NUMBER() OVER (PARTITION BY grp ORDER BY metric DESC) AS rn
+        FROM agg
+      )
+      SELECT grp, entity, metric FROM ranked WHERE rn <= N
+      ORDER BY grp, metric DESC;
+- Use a single global ORDER BY ... LIMIT N ONLY when the question has NO
+  per-group qualifier (plain "top N customers").
+
+PLAIN TOP-N vs WINDOWED TOP-N
+- A plain "top N" / "worst N" with NO per-group qualifier needs only
+  `... GROUP BY entity ORDER BY metric DESC LIMIT N`. Do NOT use a window
+  function or CTE for it — that adds a needless alias that often breaks.
+- Use the window-function pattern ONLY for per-group ("X-wise") questions.
+
+RESERVED WORDS — NEVER USE AS ALIASES
+- `RANK`, `ROW_NUMBER`, `ORDER`, `GROUP`, `DESC`, `ASC`, `ROWS`, `RANGE`,
+  `COUNT`, `SUM`, `OVER`, `PARTITION`, `DENSE_RANK`, `LAG`, `LEAD` are reserved
+  in MySQL 8.0 and will cause error 1064 if used as a column alias.
+- Name the row-number column `rn` (never `rank`). Backtick EVERY alias and
+  identifier without exception.
+
 DIALECT RULES
 
 1. You MUST use valid MySQL syntax.
@@ -1287,8 +1378,12 @@ Return ONLY valid JSON:
 }
 
 """
-        sql_user = f"Schemas available:\n{schema_context}\n\nQuestion: {question}"
-        sql_json = _mistral(sql_sys, sql_user)
+        sql_user = f"Schemas available:\n{schema_context}\n\nOriginal Question: {question}\n\nCanonical Query (Structured Intent):\n{canonical_query_str}"
+        sql_json = _mistral(sql_sys, sql_user, temperature=0.0)
+
+        # Track failures so we never fall through to an empty-context LLM answer.
+        agg_sql_error = None
+        sql_results = []
 
         if sql_json and sql_json.get("sql"):
             target_db = sql_json.get("db", "").strip()
@@ -1330,18 +1425,44 @@ Return ONLY valid JSON:
                                     break
                 
                 if cur_sql:
-                    cur_sql.execute(sql_query)
-                    rows = cur_sql.fetchall()
-                    sql_results = [dict(r) for r in rows]
-                    
-                    # Convert non-serializable objects to string
-                    for row in sql_results:
-                        for k, v in row.items():
-                            if v is not None and not isinstance(v, (str, int, float, bool)):
-                                row[k] = str(v)
-                                
-                    print(f"[SQL_EXEC] Success! Returned {len(sql_results)} rows.")
+                    for _attempt in range(2):
+                        try:
+                            cur_sql.execute(sql_query)
+                            rows = cur_sql.fetchall()
+                            sql_results = [dict(r) for r in rows]
+
+                            # Convert non-serializable objects to string
+                            for row in sql_results:
+                                for k, v in row.items():
+                                    if v is not None and not isinstance(v, (str, int, float, bool)):
+                                        row[k] = str(v)
+
+                            agg_sql_error = None
+                            print(f"[SQL_EXEC] Success! Returned {len(sql_results)} rows.")
+                            break
+                        except Exception as ex:
+                            agg_sql_error = str(ex)
+                            print(f"[SQL_EXEC] Attempt {_attempt + 1} failed: {ex}")
+                            if _attempt == 1:
+                                break
+                            # Self-heal: send the error back to the model once.
+                            repair_user = (
+                                f"The following MySQL query FAILED. Fix it and return the same JSON shape.\n\n"
+                                f"SQL:\n{sql_query}\n\nMySQL error:\n{ex}\n\n"
+                                f"Common fixes: a reserved word is used as an alias (rank, order, group, "
+                                f"desc, asc, count, sum, rows, range) — rename the row-number alias to `rn` "
+                                f"and backtick every identifier; verify MySQL 8.0 window syntax; keep the "
+                                f"numeric-cleaning CAST(REGEXP_REPLACE(...)) wrappers intact.\n\n"
+                                f"Schemas:\n{schema_context}\n\nOriginal Question: {question}"
+                            )
+                            fix_json = _mistral(sql_sys, repair_user, temperature=0.0)
+                            if fix_json and fix_json.get("sql"):
+                                sql_query = fix_json.get("sql", "").strip()
+                                print(f"[SQL_REPAIR] Retrying with corrected SQL:\n{sql_query}")
+                            else:
+                                break
             except Exception as e:
+                agg_sql_error = str(e)
                 print(f"[SQL_EXEC] Execution failed: {e}")
             finally:
                 if cur_sql: 
@@ -1354,6 +1475,20 @@ Return ONLY valid JSON:
             if sql_results:
                 # Override context with SQL results for final LLM generation
                 context = f"SQL Query executed: {sql_query}\n\nSQL Results:\n" + json.dumps(sql_results, indent=2)
+
+        # AGGREGATION fail-safe: if no SQL rows were produced, do NOT let the
+        # model answer from an empty/stale context (that caused fabricated,
+        # inconsistent numbers). Constrain it to an honest "could not compute".
+        if intent == "AGGREGATION" and not sql_results:
+            _detail = f" (error: {agg_sql_error})" if agg_sql_error else ""
+            print(f"[AGGREGATION] No SQL rows — refusing to fabricate{_detail}")
+            context = (
+                "SQL_COMPUTATION_FAILED. The structured query returned no rows"
+                f"{_detail}. You MUST NOT fabricate, estimate, infer, or guess "
+                "any numbers, names, totals, or rankings. Reply that the result "
+                "could not be computed from the database for this question and "
+                "suggest the user rephrase or retry."
+            )
 
     # Graph
     if _is_graph(question):
@@ -1384,11 +1519,11 @@ If the question is trend-related (contains: trend, growth, decline, increase, de
 
 REQUIRED FORMAT:
 
-{
+{{
   "month": "...",
   "invoice_value": 123,
   "series": "..."
-}
+}}
 
 10. NEVER use keys like:
 

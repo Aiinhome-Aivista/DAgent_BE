@@ -87,7 +87,8 @@ from controllers.ftp_connector_controller import (
     ftp_get_schedule_controller,
     ftp_fetch_log_controller,
 )
-from controllers.dashboard_visuals import graph_metrics_controller,extract_graph_data_controller
+from controllers.dashboard_visuals import graph_metrics_controller,extract_graph_data_controller, default_dashboard_metrics_controller
+
 
 from flask_socketio import SocketIO
 app = Flask(__name__)
@@ -521,6 +522,10 @@ def graph_metrics():
 @app.route("/graph-extract-data", methods=["POST"])
 def extract_graph_data():
     return extract_graph_data_controller()    
+
+@app.route("/default-dashboard-metrics", methods=["POST"])
+def default_dashboard_metrics():
+    return default_dashboard_metrics_controller(get_db_connection)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import pandas as pd
 import pymysql
 from flask import request, jsonify
 from database.config import MYSQL_CONFIG
+from database.csv_processor import _infer_schema, _apply_schema, MONEY_PRECISION, MONEY_SCALE
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "uploads"))
@@ -83,13 +84,18 @@ def import_csv_data(get_db_connection):
                 continue
 
             file_path = os.path.join(UPLOAD_DIR, matched_file)
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            df = pd.read_csv(file_path, encoding="utf-8-sig", dtype=str)
 
             if df.empty:
                 continue
 
             # Standardize column names: strip whitespace, replace spaces and dots with underscores
             df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(".", "_", regex=False)
+            
+            # Infer schema and apply data types using csv_processor
+            schema = _infer_schema(df.head(50000))
+            df = _apply_schema(df, schema)
+            
             df = df.where(pd.notnull(df), None)
             df_cols_set = set(df.columns)
             num_columns = len(df.columns)
@@ -106,7 +112,19 @@ def import_csv_data(get_db_connection):
 
             if not matched_table:
                 # Create the new table
-                cols = ", ".join([f"`{c}` TEXT" for c in df.columns])
+                col_defs = []
+                for c in df.columns:
+                    kind = schema.get(c, {}).get('kind', 'text')
+                    if kind == 'numeric':
+                        col_defs.append(f"`{c}` DECIMAL({MONEY_PRECISION}, {MONEY_SCALE})")
+                    elif kind == 'int':
+                        col_defs.append(f"`{c}` BIGINT")
+                    elif kind == 'date':
+                        col_defs.append(f"`{c}` DATE")
+                    else:
+                        col_defs.append(f"`{c}` TEXT")
+                
+                cols = ", ".join(col_defs)
                 create_query = f"CREATE TABLE IF NOT EXISTS `{table_name}` ({cols})"
                 user_cursor.execute(create_query)
                 # Register in schema_map so subsequent files in this batch can match it
