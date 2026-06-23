@@ -1,3 +1,4 @@
+from sqlalchemy.engine import cursor
 import json
 from flask import request, jsonify
 from model.llm_client import call_llm_chat
@@ -1492,348 +1493,6 @@ def sales_by_zone_data_controller(get_db_connection):
 
 # year_wise_sales_comparison_controller
 
-# def year_wise_sales_comparison_controller(get_db_connection):
-#     """
-#     Fetches Year-wise Sales Comparison data grouped by month and year.
-#     Returns data in the format requested by the user:
-#     {
-#       "seriesKey": "year",
-#       "title": "Year-wise Sales Comparison",
-#       "type": "bar_chart",
-#       "xKey": "month",
-#       "yKey": "sales_value",
-#       "visualization": [
-#         { "month": "January",  "sales_value": 232010756.39, "year": "2026" }, ...
-#       ]
-#     }
-#     """
-#     data = request.get_json(force=True, silent=True)
-#     if not data:
-#         return jsonify({"error": "No data provided"}), 400
-        
-#     session_id = data.get("session_id", "")
-#     if not session_id:
-#         return jsonify({"error": "Missing session_id"}), 400
-
-#     # Optional: frontend can pass a list of years to filter
-#     selected_years = data.get("selected_years", [])
-
-#     conn = None
-#     cursor = None
-#     visualization_data = []
-
-#     try:
-#         conn = get_db_connection()
-#         if not conn:
-#             return jsonify({"error": "Failed to connect to database."}), 500
-            
-#         cursor = conn.cursor(dictionary=True)
-
-#         # 1. Look up the dynamic table name and database from external_db_sync_log
-#         cursor.execute("""
-#             SELECT new_user_db, table_name 
-#             FROM external_db_sync_log 
-#             WHERE session_id=%s 
-#               AND new_user_db IS NOT NULL 
-#               AND new_user_db != ''
-#               AND table_name IS NOT NULL
-#             ORDER BY id DESC LIMIT 1
-#         """, (session_id,))
-#         sync_row = cursor.fetchone()
-
-#         if not sync_row:
-#             return jsonify({
-#                 "title": "Year-wise Sales Comparison",
-#                 "type": "bar_chart",
-#                 "xKey": "month",
-#                 "yKey": "sales_value",
-#                 "seriesKey": "year",
-#                 "visualization": visualization_data
-#             }), 200
-
-#         user_db = sync_row["new_user_db"]
-#         tbl_name = sync_row["table_name"]
-#         table_name = f"`{user_db}`.`{tbl_name}`"
-        
-#         cursor.execute(f"USE `{user_db}`")
-        
-#         revenue_expr = """
-#             CAST(
-#                 REPLACE(TRIM(invoice_value), ',', '')
-#                 AS DECIMAL(18,2)
-#             )
-#         """
-
-#         # Construct WHERE clause for selected years if provided
-#         year_filter = ""
-#         if selected_years and isinstance(selected_years, list):
-#             # Ensure years are integers
-#             valid_years = [str(int(y)) for y in selected_years]
-#             if valid_years:
-#                 year_filter = f" AND YEAR(invoice_date) IN ({','.join(valid_years)})"
-
-#         query = f"""
-#             SELECT 
-#                 MONTHNAME(invoice_date) AS month_name,
-#                 MONTH(invoice_date) AS month_num,
-#                 YEAR(invoice_date) AS year,
-#                 ROUND(SUM({revenue_expr}), 2) AS total_sales
-#             FROM {table_name}
-#             WHERE invoice_date IS NOT NULL {year_filter}
-#             GROUP BY YEAR(invoice_date), MONTH(invoice_date), MONTHNAME(invoice_date)
-#             ORDER BY year ASC, month_num ASC
-#         """
-        
-#         cursor.execute(query)
-#         results = cursor.fetchall()
-
-#         for row in results:
-#             visualization_data.append({
-#                 "month": row["month_name"],
-#                 "sales_value": float(row["total_sales"] or 0),
-#                 "year": str(row["year"])
-#             })
-
-#         return jsonify({
-#             "seriesKey": "year",
-#             "title": "Year-wise Sales Comparison",
-#             "type": "bar_chart",
-#             "xKey": "month",
-#             "yKey": "sales_value",
-#             "visualization": visualization_data
-#         }), 200
-
-#     except Exception as exc:
-#         print(f"[Year-wise Sales Comparison] Database query failed: {exc}")
-#         return jsonify({
-#             "status": "error",
-#             "message": "Database query failed.",
-#             "details": str(exc)
-#         }), 500
-
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if conn and conn.is_connected():
-#             conn.close()
-
-# def year_wise_sales_comparison_controller(get_db_connection):
-#     """
-#     Fetches Year-wise Sales Comparison data grouped by month and year.
-#     Returns data in the format requested by the user:
-#     {
-#       "seriesKey": "year",
-#       "title": "Year-wise Sales Comparison",
-#       "type": "bar_chart",
-#       "xKey": "month",
-#       "yKey": "sales_value",
-#       "visualization": [
-#         { "month": "January",  "sales_value": 232010756.39, "year": "2026" }, ...
-#       ]
-#     }
-#     """
-#     data = request.get_json(force=True, silent=True)
-#     if not data:
-#         return jsonify({"error": "No data provided"}), 400
-        
-#     session_id = data.get("session_id", "")
-#     if not session_id:
-#         return jsonify({"error": "Missing session_id"}), 400
-
-#     def make_list(val):
-#         if val is None:
-#             return []
-#         if isinstance(val, list):
-#             return [v for v in val if v]
-#         return [val] if val else []
-
-#     selected_years = make_list(data.get("selected_years") or data.get("years") or data.get("year"))
-#     selected_zones = make_list(data.get("selected_zones") or data.get("zones") or data.get("Zone") or data.get("zone"))
-#     selected_regions = make_list(data.get("selected_regions") or data.get("regions") or data.get("Region") or data.get("region"))
-#     selected_months = make_list(data.get("selected_months") or data.get("months") or data.get("Month") or data.get("month"))
-#     selected_customer_types = make_list(data.get("selected_customer_types") or data.get("customer_types") or data.get("customer_type"))
-
-#     conn = None
-#     cursor = None
-#     visualization_data = []
-
-#     try:
-#         conn = get_db_connection()
-#         if not conn:
-#             return jsonify({"error": "Failed to connect to database."}), 500
-            
-#         cursor = conn.cursor(dictionary=True)
-
-#         # 1. Look up the dynamic table name and database from external_db_sync_log
-#         cursor.execute("""
-#             SELECT new_user_db, table_name 
-#             FROM external_db_sync_log 
-#             WHERE session_id=%s 
-#               AND new_user_db IS NOT NULL 
-#               AND new_user_db != ''
-#               AND table_name IS NOT NULL
-#             ORDER BY id DESC LIMIT 1
-#         """, (session_id,))
-#         sync_row = cursor.fetchone()
-
-#         if not sync_row:
-#             return jsonify({
-#                 "title": "Year-wise Sales Comparison",
-#                 "type": "bar_chart",
-#                 "xKey": "month",
-#                 "yKey": "sales_value",
-#                 "seriesKey": "year",
-#                 "visualization": visualization_data
-#             }), 200
-
-#         user_db = sync_row["new_user_db"]
-#         tbl_name = sync_row["table_name"]
-#         table_name = f"`{user_db}`.`{tbl_name}`"
-        
-#         cursor.execute(f"USE `{user_db}`")
-
-#         # Determine actual column names dynamically
-#         actual_invoice_date = (get_actual_column_name(cursor, table_name, "invoice_date") or 
-#                                get_actual_column_name(cursor, table_name, "date"))
-
-#         if not actual_invoice_date:
-#             return jsonify({
-#                 "seriesKey": "year",
-#                 "title": "Year-wise Sales Comparison",
-#                 "type": "bar_chart",
-#                 "xKey": "month",
-#                 "yKey": "sales_value",
-#                 "visualization": []
-#             }), 200
-
-#         actual_invoice_value = (get_actual_column_name(cursor, table_name, "invoice_value") or 
-#                                 get_actual_column_name(cursor, table_name, "taxable_value") or
-#                                 get_actual_column_name(cursor, table_name, "value"))
-
-#         if not actual_invoice_value:
-#             return jsonify({
-#                 "seriesKey": "year",
-#                 "title": "Year-wise Sales Comparison",
-#                 "type": "bar_chart",
-#                 "xKey": "month",
-#                 "yKey": "sales_value",
-#                 "visualization": []
-#             }), 200
-
-#         revenue_expr = f"""
-#             CAST(
-#                 REPLACE(TRIM({actual_invoice_value}), ',', '')
-#                 AS DECIMAL(18,2)
-#             )
-#         """
-
-#         where_clauses = [f"{actual_invoice_date} IS NOT NULL"]
-#         params = []
-
-#         # Years filter
-#         if selected_years:
-#             valid_years = []
-#             for y in selected_years:
-#                 if str(y).strip().lower() == "all":
-#                     continue
-#                 try:
-#                     valid_years.append(int(y))
-#                 except ValueError:
-#                     pass
-#             if valid_years:
-#                 placeholders = ",".join(["%s"] * len(valid_years))
-#                 where_clauses.append(f"YEAR({actual_invoice_date}) IN ({placeholders})")
-#                 params.extend(valid_years)
-
-#         # Months filter
-#         if selected_months:
-#             valid_months = [str(m).strip() for m in selected_months if m and str(m).strip().lower() != "all"]
-#             if valid_months:
-#                 placeholders = ",".join(["%s"] * len(valid_months))
-#                 where_clauses.append(f"MONTHNAME({actual_invoice_date}) IN ({placeholders})")
-#                 params.extend(valid_months)
-
-#         # Zone Filter
-#         actual_zone = get_actual_column_name(cursor, table_name, "zone")
-#         if actual_zone and selected_zones:
-#             valid_zones = [str(z).strip() for z in selected_zones if z and str(z).strip().lower() != "all"]
-#             if valid_zones:
-#                 placeholders = ",".join(["%s"] * len(valid_zones))
-#                 where_clauses.append(f"{actual_zone} IN ({placeholders})")
-#                 params.extend(valid_zones)
-
-#         # Region Filter
-#         actual_region = get_actual_column_name(cursor, table_name, "region")
-#         if actual_region and selected_regions:
-#             valid_regions = [str(r).strip() for r in selected_regions if r and str(r).strip().lower() != "all"]
-#             if valid_regions:
-#                 placeholders = ",".join(["%s"] * len(valid_regions))
-#                 where_clauses.append(f"{actual_region} IN ({placeholders})")
-#                 params.extend(valid_regions)
-
-#         # Customer Type Filter
-#         actual_customer_type = (get_actual_column_name(cursor, table_name, "customer_type") or 
-#                                 get_actual_column_name(cursor, table_name, "customer_category") or 
-#                                 get_actual_column_name(cursor, table_name, "cust_type") or 
-#                                 get_actual_column_name(cursor, table_name, "type"))
-#         if actual_customer_type and selected_customer_types:
-#             valid_types = [str(c).strip() for c in selected_customer_types if c and str(c).strip().lower() != "all"]
-#             if valid_types:
-#                 placeholders = ",".join(["%s"] * len(valid_types))
-#                 where_clauses.append(f"{actual_customer_type} IN ({placeholders})")
-#                 params.extend(valid_types)
-
-#         where_sql = " AND ".join(where_clauses)
-#         if where_sql:
-#             where_sql = "WHERE " + where_sql
-
-#         query = f"""
-#             SELECT 
-#                 MONTHNAME({actual_invoice_date}) AS month_name,
-#                 MONTH({actual_invoice_date}) AS month_num,
-#                 YEAR({actual_invoice_date}) AS year,
-#                 ROUND(SUM({revenue_expr}), 2) AS total_sales
-#             FROM {table_name}
-#             {where_sql}
-#             GROUP BY YEAR({actual_invoice_date}), MONTH({actual_invoice_date}), MONTHNAME({actual_invoice_date})
-#             ORDER BY year ASC, month_num ASC
-#         """
-        
-        
-#         cursor.execute(query, tuple(params))
-#         results = cursor.fetchall()
-
-#         for row in results:
-#             visualization_data.append({
-#                 "month": row["month_name"],
-#                 "sales_value": float(row["total_sales"] or 0),
-#                 "year": str(row["year"])
-#             })
-
-#         return jsonify({
-#             "seriesKey": "year",
-#             "title": "Year-wise Sales Comparison",
-#             "type": "bar_chart",
-#             "xKey": "month",
-#             "yKey": "sales_value",
-#             "visualization": visualization_data
-#         }), 200
-
-#     except Exception as exc:
-#         print(f"[Year-wise Sales Comparison] Database query failed: {exc}")
-#         return jsonify({
-#             "status": "error",
-#             "message": "Database query failed.",
-#             "details": str(exc)
-#         }), 500
-
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if conn and conn.is_connected():
-#             conn.close()
-
-#  new 
 
 
 def year_wise_sales_comparison_controller(get_db_connection):
@@ -1884,32 +1543,100 @@ def year_wise_sales_comparison_controller(get_db_connection):
         cursor = conn.cursor(dictionary=True)
 
         # 1. Look up the dynamic table name and database from external_db_sync_log
-        cursor.execute("""
-            SELECT new_user_db, table_name 
-            FROM external_db_sync_log 
-            WHERE session_id=%s 
-              AND new_user_db IS NOT NULL 
-              AND new_user_db != ''
-              AND table_name IS NOT NULL
-            ORDER BY id DESC LIMIT 1
-        """, (session_id,))
-        sync_row = cursor.fetchone()
+        # cursor.execute("""
+        #     SELECT new_user_db, table_name 
+        #     FROM external_db_sync_log 
+        #     WHERE session_id=%s 
+        #       AND new_user_db IS NOT NULL 
+        #       AND new_user_db != ''
+        #       AND table_name IS NOT NULL
+        #     ORDER BY id DESC LIMIT 1
+        # """, (session_id,))
+        # sync_row = cursor.fetchone()
 
-        if not sync_row:
+        # if not sync_row:
+        #     return jsonify({
+        #         "title": "Year-wise Sales Comparison",
+        #         "type": "bar_chart",
+        #         "xKey": "month",
+        #         "yKey": "sales_value",
+        #         "seriesKey": "year",
+        #         "visualization": visualization_data
+        #     }), 200
+
+        # user_db = sync_row["new_user_db"]
+        # tbl_name = sync_row["table_name"]
+        # table_name = f"`{user_db}`.`{tbl_name}`"
+        
+        # cursor.execute(f"USE `{user_db}`")
+        # cursor.execute("SHOW TABLES")
+        # tables = [list(r.values())[0] for r in cursor.fetchall()]
+        cursor.execute("""
+            SELECT new_user_db, table_name
+            FROM external_db_sync_log
+            WHERE session_id=%s
+            AND new_user_db IS NOT NULL
+            AND new_user_db != ''
+            AND table_name IS NOT NULL
+            ORDER BY id DESC
+        """, (session_id,))
+
+        sync_rows = cursor.fetchall()
+
+        if not sync_rows:
             return jsonify({
                 "title": "Year-wise Sales Comparison",
                 "type": "bar_chart",
                 "xKey": "month",
                 "yKey": "sales_value",
                 "seriesKey": "year",
-                "visualization": visualization_data
+                "visualization": []
             }), 200
 
-        user_db = sync_row["new_user_db"]
-        tbl_name = sync_row["table_name"]
-        table_name = f"`{user_db}`.`{tbl_name}`"
-        
+        user_db = sync_rows[0]["new_user_db"]
+
         cursor.execute(f"USE `{user_db}`")
+
+        session_tables = [
+            f"`{user_db}`.`{row['table_name']}`"
+            for row in sync_rows
+        ]
+
+        print("SESSION TABLES:", session_tables)
+
+        invoice_table = None
+
+        for tbl in session_tables:
+
+            inv_date = (
+                get_actual_column_name(cursor, tbl, "invoice_date")
+                or get_actual_column_name(cursor, tbl, "date")
+            )
+
+            inv_value = (
+                get_actual_column_name(cursor, tbl, "invoice_value")
+                or get_actual_column_name(cursor, tbl, "taxable_value")
+                or get_actual_column_name(cursor, tbl, "value")
+            )
+
+            if inv_date and inv_value:
+                invoice_table = tbl
+                break
+
+        if not invoice_table:
+            return jsonify({
+                "seriesKey": "year",
+                "title": "Year-wise Sales Comparison",
+                "type": "bar_chart",
+                "xKey": "month",
+                "yKey": "sales_value",
+                "visualization": []
+            }), 200
+
+        table_name = invoice_table
+
+        print("FACT TABLE:", table_name)
+
         cursor.execute("SHOW TABLES")
         tables = [list(r.values())[0] for r in cursor.fetchall()]
 
@@ -1952,8 +1679,12 @@ def year_wise_sales_comparison_controller(get_db_connection):
             )
         """
 
+        # from_clause = table_name
+        # actual_customer_type_expr = None
         from_clause = table_name
         actual_customer_type_expr = None
+        customer_tbl_name = None
+        actual_cust_category_col = None
 
         # Check if customer type column is directly in table_name
         direct_customer_type = (get_actual_column_name(cursor, table_name, "customer_type") or 
@@ -1995,7 +1726,11 @@ def year_wise_sales_comparison_controller(get_db_connection):
 
         where_clauses = [f"{actual_invoice_date_expr} IS NOT NULL"]
         params = []
+        print("CUSTOMER TABLE:", customer_tbl_name)
+        print("CUSTOMER TYPE COLUMN:", actual_customer_type_expr)
 
+        print("FROM CLAUSE:")
+        print(from_clause)
         # Years filter
         if selected_years:
             valid_years = []
@@ -2038,12 +1773,27 @@ def year_wise_sales_comparison_controller(get_db_connection):
                 params.extend(valid_regions)
 
         # Customer Type Filter
+        # if actual_customer_type_expr and selected_customer_types:
+        #     valid_types = [str(c).strip() for c in selected_customer_types if c and str(c).strip().lower() != "all"]
+        #     if valid_types:
+        #         placeholders = ",".join(["%s"] * len(valid_types))
+        #         where_clauses.append(f"{actual_customer_type_expr} IN ({placeholders})")
+        #         params.extend(valid_types)
         if actual_customer_type_expr and selected_customer_types:
-            valid_types = [str(c).strip() for c in selected_customer_types if c and str(c).strip().lower() != "all"]
+            valid_types = [
+                str(c).strip().upper()
+                for c in selected_customer_types
+                if c and str(c).strip().lower() != "all"
+            ]
+
             if valid_types:
                 placeholders = ",".join(["%s"] * len(valid_types))
-                where_clauses.append(f"{actual_customer_type_expr} IN ({placeholders})")
-                params.extend(valid_types)
+
+                where_clauses.append(
+                f"UPPER({actual_customer_type_expr}) IN ({placeholders})"
+            )
+
+        params.extend(valid_types)
 
         where_sql = " AND ".join(where_clauses)
         if where_sql:
@@ -2061,6 +1811,21 @@ def year_wise_sales_comparison_controller(get_db_connection):
             ORDER BY year ASC, month_num ASC
         """
         
+        print("\n========== FINAL QUERY ==========")
+        print(query)
+
+        print("\n========== PARAMS ==========")
+        print(params)
+
+        print("\n========== FACT TABLE ==========")
+        print(table_name)
+
+        print("\n========== CUSTOMER TABLE ==========")
+        print(customer_tbl_name)
+
+        print("\n========== CUSTOMER TYPE ==========")
+        print(actual_customer_type_expr)
+
         cursor.execute(query, tuple(params))
         results = cursor.fetchall()
 
