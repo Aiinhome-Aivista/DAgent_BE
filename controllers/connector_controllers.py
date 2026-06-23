@@ -1416,7 +1416,7 @@ def delete_workspace_controller(get_db_connection):
 
         # Get workspace
         cursor.execute("""
-            SELECT id, session_id
+            SELECT id, session_id, user_id
             FROM workspaces
             WHERE id = %s
         """, (workspace_id,))
@@ -1430,9 +1430,76 @@ def delete_workspace_controller(get_db_connection):
             }), 404
 
         session_id = workspace["session_id"]
+        user_id = workspace.get("user_id")
+
+        if not user_id:
+            # Fallback to workspace_users to find user_id
+            cursor.execute("SELECT user_id FROM workspace_users WHERE workspace_id = %s LIMIT 1", (workspace_id,))
+            wu_row = cursor.fetchone()
+            if wu_row:
+                user_id = wu_row["user_id"]
 
         print(f"Deleting workspace_id={workspace_id}")
         print(f"session_id={session_id}")
+        print(f"user_id={user_id}")
+
+        # 0. Drop/truncate associated tables in user's custom database
+        # Get new_user_db and table_name directly from external_db_sync_log for this session
+        cursor.execute("""
+            SELECT DISTINCT new_user_db, table_name 
+            FROM external_db_sync_log 
+            WHERE session_id = %s 
+              AND new_user_db IS NOT NULL AND new_user_db != ''
+              AND table_name IS NOT NULL AND table_name != ''
+        """, (session_id,))
+        sync_entries = cursor.fetchall()
+
+        # Group tables by database
+        db_tables_map = {}
+        for entry in sync_entries:
+            db_name = entry["new_user_db"]
+            tbl_name = entry["table_name"]
+            if db_name not in db_tables_map:
+                db_tables_map[db_name] = []
+            db_tables_map[db_name].append(tbl_name)
+
+        print(f"[Workspace Delete] Databases and tables to clean: {db_tables_map}")
+
+        # For each user database, drop/truncate tables
+        for target_db, tables_to_drop in db_tables_map.items():
+            try:
+                cursor.execute(f"USE `{target_db}`")
+                cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+
+                for table in set(tables_to_drop):
+                    if table.lower() == 'd__project_backend_2025_traverseai_2026_d_agentv1_1_d_agent_':
+                        cursor.execute(f"TRUNCATE TABLE `{table}`")
+                        print(f"[Workspace Delete] Truncated table: {target_db}.{table}")
+                    else:
+                        cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
+                        print(f"[Workspace Delete] Dropped table: {target_db}.{table}")
+
+                # Also check if d__project... table exists in this database and truncate it
+                # (it may not be tracked in external_db_sync_log)
+                d_project_table = 'd__project_backend_2025_traverseai_2026_d_agentv1_1_d_agent_'
+                if d_project_table not in [t.lower() for t in tables_to_drop]:
+                    try:
+                        cursor.execute(f"SHOW TABLES LIKE %s", (d_project_table,))
+                        if cursor.fetchone():
+                            cursor.execute(f"TRUNCATE TABLE `{d_project_table}`")
+                            print(f"[Workspace Delete] Truncated untracked table: {target_db}.{d_project_table}")
+                    except Exception as dp_err:
+                        print(f"[Workspace Delete] d__project table check/truncate failed: {dp_err}")
+
+                cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+
+            except Exception as drop_err:
+                print(f"[Workspace Delete] Error cleaning tables in {target_db}: {drop_err}")
+            finally:
+                try:
+                    cursor.execute(f"USE `{config.MYSQL_CONFIG['database']}`")
+                except Exception as use_err:
+                    print(f"[Workspace Delete] Error switching back to main database: {use_err}")
 
         # 1. Delete ChromaDB Collection
         try:
@@ -1468,21 +1535,67 @@ def delete_workspace_controller(get_db_connection):
             if sys_db.has_database(ARANGO_DB):
                 arango_db = arango_client.db(ARANGO_DB, username=ARANGO_USER, password=ARANGO_PASS)
                 
-                # Delete Document Collection for this session if it uses session_id as collection name
-                # Or run AQL to delete documents matching this session_id
-                # (Assuming documents have a session_id field based on standard practice)
-                aql_query = f"""
-                FOR doc IN graph
-                    FILTER doc.session_id == '{session_id}'
-                    REMOVE doc IN graph
-                """
-                try:
-                    arango_db.aql.execute(aql_query)
-                    print("Successfully deleted ArangoDB data for session")
-                except Exception as aql_err:
-                    print(f"ArangoDB AQL warning (might not exist): {aql_err}")
+                # Delete from session_nodes and session_edges collections
+                # These are the actual collections used by _sync_to_arango()
+                for collection_name in ["session_nodes", "session_edges"]:
+                    if arango_db.has_collection(collection_name):
+                        try:
+                            aql_query = f"""
+                            FOR doc IN {collection_name}
+                                FILTER doc.session_id == @session_id
+                                REMOVE doc IN {collection_name}
+                            """
+                            arango_db.aql.execute(aql_query, bind_vars={"session_id": session_id})
+                            print(f"[Workspace Delete] Deleted ArangoDB data from {collection_name} for session {session_id}")
+                        except Exception as aql_err:
+                            print(f"[Workspace Delete] ArangoDB {collection_name} delete warning: {aql_err}")
+                
+                print(f"[Workspace Delete] ArangoDB cleanup complete for session {session_id}")
         except Exception as e:
-            print(f"Error connecting to ArangoDB for deletion: {e}")
+            print(f"[Workspace Delete] Error connecting to ArangoDB for deletion: {e}")
+
+        # 2.5 Delete session files from chroma_store, chunk_uploads, and graphs folders
+        import os
+        import shutil
+        PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # (a) chunk_uploads/<session_id> folder
+        try:
+            chunk_folder = os.path.join(PROJECT_ROOT, "chunk_uploads", session_id)
+            if os.path.isdir(chunk_folder):
+                shutil.rmtree(chunk_folder)
+                print(f"[Workspace Delete] Deleted chunk_uploads folder: {chunk_folder}")
+        except Exception as chunk_err:
+            print(f"[Workspace Delete] Error deleting chunk_uploads: {chunk_err}")
+
+        # (b) graphs/ - find graph HTML files from the graph table before they get deleted
+        try:
+            cursor.execute("SELECT graph_url FROM `graph` WHERE session_name = %s", (session_id,))
+            graph_rows = cursor.fetchall()
+            graphs_folder = os.path.join(PROJECT_ROOT, "graphs")
+            for grow in graph_rows:
+                graph_url = grow.get("graph_url") or ""
+                # Extract filename from URL like "http://.../graphs/graph_abc123.html"
+                if "graphs/" in graph_url:
+                    graph_filename = graph_url.split("graphs/")[-1]
+                    graph_file_path = os.path.join(graphs_folder, graph_filename)
+                    if os.path.isfile(graph_file_path):
+                        os.remove(graph_file_path)
+                        print(f"[Workspace Delete] Deleted graph file: {graph_file_path}")
+        except Exception as graph_err:
+            print(f"[Workspace Delete] Error deleting graph files: {graph_err}")
+
+        # (c) chroma_store - ChromaDB internal directories
+        # The ChromaDB collection was already deleted via API above.
+        # But also check if any session-specific subfolder exists
+        try:
+            chroma_dir = os.path.join(PROJECT_ROOT, "chroma_store")
+            session_chroma = os.path.join(chroma_dir, session_id)
+            if os.path.isdir(session_chroma):
+                shutil.rmtree(session_chroma)
+                print(f"[Workspace Delete] Deleted chroma_store session folder: {session_chroma}")
+        except Exception as chroma_fs_err:
+            print(f"[Workspace Delete] Error deleting chroma_store files: {chroma_fs_err}")
 
         # 3. Delete MySQL Records
         delete_queries = [
@@ -1499,6 +1612,10 @@ def delete_workspace_controller(get_db_connection):
             ("DELETE FROM `connection_history` WHERE session_id = %s", (session_id,)),
             ("DELETE FROM `database_credential` WHERE session_id = %s", (session_id,)),
             ("DELETE FROM `saved_web_results` WHERE session_id = %s", (session_id,)),
+
+            ("DELETE FROM `external_db_sync_log` WHERE session_id = %s", (session_id,)),
+            ("DELETE FROM `session_chat_history` WHERE session_id = %s", (session_id,)),
+            ("DELETE FROM `session_analysis_cache` WHERE session_id = %s", (session_id,)),
 
             ("DELETE FROM `workspace_users` WHERE workspace_id = %s", (workspace_id,)),
             ("DELETE FROM `workspaces` WHERE id = %s", (workspace_id,))

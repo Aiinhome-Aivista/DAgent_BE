@@ -1238,9 +1238,6 @@ BUSINESS DEFINITIONS
 - Net Sales = SUM(invoice_value) - SUM(total_discount)
 - Invoice Count = COUNT(DISTINCT invoice_number)
 - Product = Material
-- Product Category = the `CATEGORY` column (join product on invoice.Material = product.Material)
-- "category-wise" / "by category" / "product category wise" / "per category" => GROUP BY `CATEGORY`, NOT Material
-- "product-wise" / "by product" => GROUP BY Material
 - Top Dealer = Dealer ranked by Sales descending
 - Worst Dealer = Dealer ranked by Sales ascending
 - Best Performing Dealer = Dealer ranked by Sales descending
@@ -1362,13 +1359,6 @@ RESERVED WORDS — NEVER USE AS ALIASES
   in MySQL 8.0 and will cause error 1064 if used as a column alias.
 - Name the row-number column `rn` (never `rank`). Backtick EVERY alias and
   identifier without exception.
-DETERMINISTIC ORDERING — MANDATORY TIE-BREAKER
-- Many entities can tie on the same total (e.g. several customers at 0 sales).
-  ORDER BY the metric alone returns boundary rows in arbitrary order.
-- EVERY ranking ORDER BY must append the entity key as a tie-breaker:
-      ORDER BY total_sales DESC, `customer` ASC   -- top N
-      ORDER BY total_sales ASC,  `customer` ASC   -- worst N
-- Same inside windows: ROW_NUMBER() OVER (PARTITION BY grp ORDER BY metric DESC, `entity` ASC)
 
 DIALECT RULES
 
@@ -1462,7 +1452,7 @@ Return ONLY valid JSON:
                                 f"Common fixes: a reserved word is used as an alias (rank, order, group, "
                                 f"desc, asc, count, sum, rows, range) — rename the row-number alias to `rn` "
                                 f"and backtick every identifier; verify MySQL 8.0 window syntax; keep the "
-                                f"follow the COLUMN HYGIENE rule in the system prompt for numeric columns.\n\n"
+                                f"numeric-cleaning CAST(REGEXP_REPLACE(...)) wrappers intact.\n\n"
                                 f"Schemas:\n{schema_context}\n\nOriginal Question: {question}"
                             )
                             fix_json = _mistral(sql_sys, repair_user, temperature=0.0)
@@ -1519,8 +1509,8 @@ If the question is trend-related (contains: trend, growth, decline, increase, de
 4. MUST include "seriesKey": "series" at the visualization root level.
 5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
    - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
-   - Example (CATEGORY + CONSTRUCTION + VEHICLE TYPE): "series": "Tyre - RADIAL - Truck"
-   - Example (VEHICLE TYPE ONLY): "series": "Truck"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
 6. NEVER use Pie Chart or Table as primary visualization for trend queries.
 7. NEVER auto-detect legend. Always use seriesKey.
 8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.
@@ -1547,10 +1537,10 @@ Use ONLY:
 
 series
 
-11. If CATEGORY + CONSTRUCTION + VEHICLE TYPE exists:
+11. If CATEGORY + CONSTRUCTION + TYRE TYPE exists:
 
 series =
-CATEGORY + " - " + CONSTRUCTION + " - " + VEHICLE_TYPE
+CATEGORY + " - " + CONSTRUCTION + " - " + TYRE_TYPE
 
 Example:
 
@@ -1780,8 +1770,8 @@ If the question is trend-related (contains: trend, growth, decline, increase, de
 4. MUST include "seriesKey": "series" at the visualization root level.
 5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
    - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
-   - Example (CATEGORY + CONSTRUCTION + VEHICLE TYPE): "series": "Tyre - RADIAL - Truck"
-   - Example (VEHICLE TYPE ONLY): "series": "Truck"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
 6. NEVER use Pie Chart or Table as primary visualization for trend queries.
 7. NEVER auto-detect legend. Always use seriesKey.
 8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.

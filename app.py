@@ -1,3 +1,8 @@
+from controllers.dashboard_visuals import available_years_controller
+from controllers.dashboard_visuals import year_wise_sales_comparison_controller
+from controllers.dashboard_visuals import sales_by_zone_data_controller
+from controllers.dashboard_visuals import tyre_sales_data_controller
+from controllers.dashboard_visuals import dashboard_filters_controller
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -526,6 +531,27 @@ def extract_graph_data():
 @app.route("/default-dashboard-metrics", methods=["POST"])
 def default_dashboard_metrics():
     return default_dashboard_metrics_controller(get_db_connection)
+
+@app.route("/tyre-sales-data", methods=["POST"])
+def tyre_sales_data():
+    return tyre_sales_data_controller(get_db_connection)
+
+@app.route("/dashboard-filters/", methods=["GET"])
+def dashboard_filters():
+    return dashboard_filters_controller(get_db_connection)
+
+@app.route("/sales-by-zone", methods=["POST"])
+def sales_by_zone():
+    return sales_by_zone_data_controller(get_db_connection)    
+
+
+@app.route("/year-wise-sales-comparison", methods=["POST"])
+def year_wise_sales_comparison():
+    return year_wise_sales_comparison_controller(get_db_connection)
+
+@app.route("/available-years", methods=["GET"])
+def available_years():
+    return available_years_controller(get_db_connection)    
 
 
 if __name__ == "__main__":

@@ -130,40 +130,14 @@ def import_csv_data(get_db_connection):
                 # Register in schema_map so subsequent files in this batch can match it
                 schema_map[table_name] = df_cols_set
 
-            # 1. Deduplicate within the dataframe itself
-            df = df.drop_duplicates()
-            
-            # Prepare data values
-            data_values = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
-            
-            # 2. Setup Temporary Table
-            temp_table_name = "temp_csv_import_table"
-            user_cursor.execute(f"DROP TEMPORARY TABLE IF EXISTS `{temp_table_name}`")
-            user_cursor.execute(f"CREATE TEMPORARY TABLE `{temp_table_name}` LIKE `{table_name}`")
-
-            # 3. Bulk Insert into Temporary Table
+            # Append the data to the resolved table (unconditional append)
             columns = ", ".join([f"`{c}`" for c in df.columns])
             placeholders = ", ".join(["%s"] * len(df.columns))
-            insert_temp_query = f"INSERT INTO `{temp_table_name}` ({columns}) VALUES ({placeholders})"
-            user_cursor.executemany(insert_temp_query, data_values)
-
-            # 4. Insert into Main Table avoiding duplicates
-            # Build the ON conditions for all columns using NULL-safe equal (<=>)
-            join_conditions = " AND ".join([f"`{table_name}`.`{c}` <=> `{temp_table_name}`.`{c}`" for c in df.columns])
-
-            insert_main_query = f"""
-            INSERT INTO `{table_name}` ({columns})
-            SELECT {columns} FROM `{temp_table_name}`
-            WHERE NOT EXISTS (
-                SELECT 1 FROM `{table_name}`
-                WHERE {join_conditions}
-            )
-            """
-            user_cursor.execute(insert_main_query)
-            rows_inserted = user_cursor.rowcount
-
-            # 5. Drop Temporary Table
-            user_cursor.execute(f"DROP TEMPORARY TABLE `{temp_table_name}`")
+            insert_query = f"INSERT INTO `{table_name}` ({columns}) VALUES ({placeholders})"
+            
+            data_values = [tuple(None if pd.isna(x) else x for x in row) for row in df.values]
+            user_cursor.executemany(insert_query, data_values)
+            rows_inserted = len(df)
 
             total_rows += rows_inserted
             imported_files.append(file)

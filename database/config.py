@@ -16,10 +16,13 @@ MISTRAL_API_URL  = "http://localhost:11434/api/generate"
 # API Keys
 GEMINI_API_KEY = "AIzaSyC8vJObb0iCn0fAHXxK7DYxJaqj-DD7Bxo"
 MISTRAL_API_KEY = "IotlgX9OC7gWRj0WqHuT5xdhT1LNkNne"
+# MISTRAL_API_KEY = "jYzxDQI8xuqYwa1nrkPzxuIvjVXVmAkV"
 MISTRAL_MODEL="mistral-small-latest"
 
-MISTRAL_LOCAL_URL = "http://122.163.121.176:3038"
-MISTRAL_LOCAL_MODEL = "mistral:latest"
+MISTRAL_LOCAL_URL = "http://122.163.121.176:3041"
+MISTRAL_LOCAL_MODEL = "mistral-small:24b"
+# 7B Model
+# MISTRAL_LOCAL_MODEL = "mistral:latest"
 
 # Choose between: "gemini", "mistral_cloud", "mistral_local"
 ACTIVE_LLM = "mistral_cloud"
@@ -28,7 +31,7 @@ MODEL_NAME = "gemini-2.5-flash"
 
 
 # ============ Gemini Configuration ============
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "IotlgX9OC7gWRj0WqHuT5xdhT1LNkNne")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "jYzxDQI8xuqYwa1nrkPzxuIvjVXVmAkV")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyC8vJObb0iCn0fAHXxK7DYxJaqj-DD7Bxo")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
 

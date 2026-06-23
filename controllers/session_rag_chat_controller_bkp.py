@@ -1519,8 +1519,8 @@ If the question is trend-related (contains: trend, growth, decline, increase, de
 4. MUST include "seriesKey": "series" at the visualization root level.
 5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
    - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
-   - Example (CATEGORY + CONSTRUCTION + VEHICLE TYPE): "series": "Tyre - RADIAL - Truck"
-   - Example (VEHICLE TYPE ONLY): "series": "Truck"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
 6. NEVER use Pie Chart or Table as primary visualization for trend queries.
 7. NEVER auto-detect legend. Always use seriesKey.
 8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.
@@ -1547,10 +1547,10 @@ Use ONLY:
 
 series
 
-11. If CATEGORY + CONSTRUCTION + VEHICLE TYPE exists:
+11. If CATEGORY + CONSTRUCTION + TYRE TYPE exists:
 
 series =
-CATEGORY + " - " + CONSTRUCTION + " - " + VEHICLE_TYPE
+CATEGORY + " - " + CONSTRUCTION + " - " + TYRE_TYPE
 
 Example:
 
@@ -1780,8 +1780,8 @@ If the question is trend-related (contains: trend, growth, decline, increase, de
 4. MUST include "seriesKey": "series" at the visualization root level.
 5. NEVER return multiple category fields like "category": "Tube", "construction": "RADIAL" separately for a line chart. Instead, combine them into a single "series" key.
    - Example (CATEGORY + CONSTRUCTION): "series": "Tube - RADIAL"
-   - Example (CATEGORY + CONSTRUCTION + VEHICLE TYPE): "series": "Tyre - RADIAL - Truck"
-   - Example (VEHICLE TYPE ONLY): "series": "Truck"
+   - Example (CATEGORY + CONSTRUCTION + TYRE TYPE): "series": "Tyre - RADIAL - Truck"
+   - Example (TYRE TYPE ONLY): "series": "Truck"
 6. NEVER use Pie Chart or Table as primary visualization for trend queries.
 7. NEVER auto-detect legend. Always use seriesKey.
 8. Every row in "data" MUST contain the exact key "series" (matching seriesKey) and the xKey and yKey.

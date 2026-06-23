@@ -106,7 +106,7 @@ You must categorize the extracted data into one of the following chart data form
    Format of each item: {{ "name": "ZONE_NAME", "value": float }}
    
 4. "dummyTyreData": Use this if the data shows sales for different tyre categories (e.g., TRUCK, CAR, LCV, SCV, etc.).
-   Format of each item: {{ "name": "VEHICLE _TYPE", "value": float }}
+   Format of each item: {{ "name": "TYRE_TYPE", "value": float }}
 
 Important Instructions:
 - Only populate the array that matches the data category discussed in the Q&A context. 
@@ -259,13 +259,13 @@ def default_dashboard_metrics_controller(get_db_connection):
         # 2. Top Performing Tyre
         top_tyre = "N/A"
         if has_revenue:
-            # Case A: vehicle_type is in the sales_table
-            if "vehicle_type" in sales_cols:
-                real_tyre_col = sales_cols["vehicle_type"]
+            # Case A: tyre_type is in the sales_table
+            if "tyre_type" in sales_cols:
+                real_tyre_col = sales_cols["tyre_type"]
                 try:
                     cursor.execute(f"""
                         SELECT
-                            `{real_tyre_col}` AS vehicle_type,
+                            `{real_tyre_col}` AS tyre_type,
                             ROUND(SUM({revenue_expr}), 2) AS revenue
                         FROM `{sales_table}`
                         WHERE `{real_tyre_col}` IS NOT NULL
@@ -276,14 +276,14 @@ def default_dashboard_metrics_controller(get_db_connection):
                     """)
                     row = cursor.fetchone()
                     if row:
-                        top_tyre = row["vehicle_type"]
+                        top_tyre = row["tyre_type"]
                 except Exception as tyre_err:
                     print(f"[Default Metrics] Top tyre query failed: {tyre_err}")
-            # Case B: vehicle_type is in another table
+            # Case B: tyre_type is in another table
             else:
                 tyre_table = None
                 for tbl, cols in table_columns.items():
-                    if "vehicle_type" in cols:
+                    if "tyre_type" in cols:
                         tyre_table = tbl
                         break
                 if tyre_table:
@@ -300,11 +300,11 @@ def default_dashboard_metrics_controller(get_db_connection):
                     if join_col:
                         real_join_sales = sales_cols[join_col]
                         real_join_tyre = table_columns[tyre_table][join_col]
-                        real_tyre_col = table_columns[tyre_table]["vehicle_type"]
+                        real_tyre_col = table_columns[tyre_table]["tyre_type"]
                         try:
                             cursor.execute(f"""
                                 SELECT
-                                    t.`{real_tyre_col}` AS vehicle_type,
+                                    t.`{real_tyre_col}` AS tyre_type,
                                     ROUND(SUM({join_revenue_expr}), 2) AS revenue
                                 FROM `{sales_table}` s
                                 JOIN `{tyre_table}` t 
@@ -317,7 +317,7 @@ def default_dashboard_metrics_controller(get_db_connection):
                             """)
                             row = cursor.fetchone()
                             if row:
-                                top_tyre = row["vehicle_type"]
+                                top_tyre = row["tyre_type"]
                         except Exception as tyre_err:
                             print(f"[Default Metrics] Joined top tyre query failed: {tyre_err}")
 
@@ -594,14 +594,14 @@ def tyre_sales_data_controller(get_db_connection):
             
         cursor = conn.cursor(dictionary=True)
 
-        table_name, user_db, cols = get_best_table_for_session(cursor, session_id, ["vehicle_type", "invoice_value"])
+        table_name, user_db, cols = get_best_table_for_session(cursor, session_id, ["tyre_type", "invoice_value"])
 
         if not table_name:
-            return jsonify({"status": "success", "data": chart_data, "message": "Required metrics (vehicle_type, invoice_value) not found in any table."}), 200
+            return jsonify({"status": "success", "data": chart_data, "message": "Required metrics (tyre_type, invoice_value) not found in any table."}), 200
 
         cursor.execute(f"USE `{user_db}`")
         
-        actual_vehicle_type = cols["vehicle_type"]
+        actual_tyre_type = cols["tyre_type"]
         actual_invoice_value = cols["invoice_value"]
 
         revenue_expr = f"""
@@ -615,11 +615,11 @@ def tyre_sales_data_controller(get_db_connection):
         try:
             cursor.execute(f"""
                 SELECT
-                    {actual_vehicle_type} as category,
+                    {actual_tyre_type} as category,
                     ROUND(SUM({revenue_expr}), 2) AS sales_value
                 FROM {table_name}
-                WHERE {actual_vehicle_type} IS NOT NULL AND {actual_vehicle_type} <> ''
-                GROUP BY {actual_vehicle_type}
+                WHERE {actual_tyre_type} IS NOT NULL AND {actual_tyre_type} <> ''
+                GROUP BY {actual_tyre_type}
                 ORDER BY sales_value DESC
                 LIMIT 10
             """)
@@ -637,7 +637,7 @@ def tyre_sales_data_controller(get_db_connection):
                 "title": "Top 10 Tyre Types by Sales",
                 "type": "horizontal_bar_chart",
                 "xKey": "sales_value",
-                "yKey": "vehicle_type"
+                "yKey": "tyre_type"
             })
             
         return jsonify({
@@ -724,7 +724,7 @@ def dashboard_filters_controller(get_db_connection):
                 const = get_actual_column_name(cursor, t_name, "construction_type") or \
                         get_actual_column_name(cursor, t_name, "construction")
                         
-                tyre = get_actual_column_name(cursor, t_name, "vehicle_type")
+                tyre = get_actual_column_name(cursor, t_name, "tyre_type")
                 
                 if cat or const or tyre:
                     # Check if table has data
@@ -786,7 +786,7 @@ def sales_by_zone_data_controller(get_db_connection):
     # Try different possible keys for product category just in case
     product_type = data.get("product_type") or data.get("category") or data.get("product_category")
     construction_type = data.get("construction_type") or data.get("construction")
-    vehicle_type = data.get("vehicle_type")
+    tyre_type = data.get("tyre_type")
 
     if not session_id:
         return jsonify({"error": "Missing session_id"}), 400
@@ -884,12 +884,12 @@ def sales_by_zone_data_controller(get_db_connection):
                 where_clauses.append(f"{actual_const} = %s")
                 params.append(construction_type)
 
-        if vehicle_type and vehicle_type.lower() != 'all':
-            actual_tyre = (get_actual_column_name(cursor, table_name, "VEHICLE_TYPE") or
-                          get_actual_column_name(cursor, table_name, "vehicle_type"))
+        if tyre_type and tyre_type.lower() != 'all':
+            actual_tyre = (get_actual_column_name(cursor, table_name, "TYRE_TYPE") or
+                          get_actual_column_name(cursor, table_name, "tyre_type"))
             if actual_tyre:
                 where_clauses.append(f"{actual_tyre} = %s")
-                params.append(vehicle_type)
+                params.append(tyre_type)
 
         where_sql = " AND ".join(where_clauses)
 
@@ -954,217 +954,5 @@ def sales_by_zone_data_controller(get_db_connection):
             cursor.close()
         if conn and conn.is_connected():
             conn.close()
-
-
-
-# year_wise_sales_comparison_controller
-
-def year_wise_sales_comparison_controller(get_db_connection):
-    """
-    Fetches Year-wise Sales Comparison data grouped by month and year.
-    Returns data in the format requested by the user:
-    {
-      "seriesKey": "year",
-      "title": "Year-wise Sales Comparison",
-      "type": "bar_chart",
-      "xKey": "month",
-      "yKey": "sales_value",
-      "visualization": [
-        { "month": "January",  "sales_value": 232010756.39, "year": "2026" }, ...
-      ]
-    }
-    """
-    data = request.get_json(force=True, silent=True)
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-        
-    session_id = data.get("session_id", "")
-    if not session_id:
-        return jsonify({"error": "Missing session_id"}), 400
-
-    # Optional: frontend can pass a list of years to filter
-    selected_years = data.get("selected_years", [])
-
-    conn = None
-    cursor = None
-    visualization_data = []
-
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "Failed to connect to database."}), 500
-            
-        cursor = conn.cursor(dictionary=True)
-
-        # 1. Look up the dynamic table name and database from external_db_sync_log
-        cursor.execute("""
-            SELECT new_user_db, table_name 
-            FROM external_db_sync_log 
-            WHERE session_id=%s 
-              AND new_user_db IS NOT NULL 
-              AND new_user_db != ''
-              AND table_name IS NOT NULL
-            ORDER BY id DESC LIMIT 1
-        """, (session_id,))
-        sync_row = cursor.fetchone()
-
-        if not sync_row:
-            return jsonify({
-                "title": "Year-wise Sales Comparison",
-                "type": "bar_chart",
-                "xKey": "month",
-                "yKey": "sales_value",
-                "seriesKey": "year",
-                "visualization": visualization_data
-            }), 200
-
-        user_db = sync_row["new_user_db"]
-        tbl_name = sync_row["table_name"]
-        table_name = f"`{user_db}`.`{tbl_name}`"
-        
-        cursor.execute(f"USE `{user_db}`")
-        
-        revenue_expr = """
-            CAST(
-                REPLACE(TRIM(invoice_value), ',', '')
-                AS DECIMAL(18,2)
-            )
-        """
-
-        # Construct WHERE clause for selected years if provided
-        year_filter = ""
-        if selected_years and isinstance(selected_years, list):
-            # Ensure years are integers
-            valid_years = [str(int(y)) for y in selected_years]
-            if valid_years:
-                year_filter = f" AND YEAR(invoice_date) IN ({','.join(valid_years)})"
-
-        query = f"""
-            SELECT 
-                MONTHNAME(invoice_date) AS month_name,
-                MONTH(invoice_date) AS month_num,
-                YEAR(invoice_date) AS year,
-                ROUND(SUM({revenue_expr}), 2) AS total_sales
-            FROM {table_name}
-            WHERE invoice_date IS NOT NULL {year_filter}
-            GROUP BY YEAR(invoice_date), MONTH(invoice_date), MONTHNAME(invoice_date)
-            ORDER BY year ASC, month_num ASC
-        """
-        
-        cursor.execute(query)
-        results = cursor.fetchall()
-
-        for row in results:
-            visualization_data.append({
-                "month": row["month_name"],
-                "sales_value": float(row["total_sales"] or 0),
-                "year": str(row["year"])
-            })
-
-        return jsonify({
-            "seriesKey": "year",
-            "title": "Year-wise Sales Comparison",
-            "type": "bar_chart",
-            "xKey": "month",
-            "yKey": "sales_value",
-            "visualization": visualization_data
-        }), 200
-
-    except Exception as exc:
-        print(f"[Year-wise Sales Comparison] Database query failed: {exc}")
-        return jsonify({
-            "status": "error",
-            "message": "Database query failed.",
-            "details": str(exc)
-        }), 500
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn and conn.is_connected():
-            conn.close()
-
-
-
-# available_years_controller
-
-def available_years_controller(get_db_connection):
-    """
-    Fetches the distinct years available in the database for the active session.
-    Expects session_id as a GET query parameter.
-    """
-    session_id = request.args.get("session_id", "")
-    if not session_id:
-        return jsonify({"error": "Missing session_id"}), 400
-
-    conn = None
-    cursor = None
-    years = []
-
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "Failed to connect to database."}), 500
-            
-        cursor = conn.cursor(dictionary=True)
-
-        # Look up the dynamic table name and database from external_db_sync_log
-        cursor.execute("""
-            SELECT new_user_db, table_name 
-            FROM external_db_sync_log 
-            WHERE session_id=%s 
-              AND new_user_db IS NOT NULL 
-              AND new_user_db != ''
-              AND table_name IS NOT NULL
-            ORDER BY id DESC LIMIT 1
-        """, (session_id,))
-        sync_row = cursor.fetchone()
-
-        if not sync_row:
-            return jsonify({
-                "status": "success",
-                "years": []
-            }), 200
-
-        user_db = sync_row["new_user_db"]
-        tbl_name = sync_row["table_name"]
-        table_name = f"`{user_db}`.`{tbl_name}`"
-        
-        cursor.execute(f"USE `{user_db}`")
-        
-        # Determine actual invoice date column name dynamically
-        actual_invoice_date = (get_actual_column_name(cursor, table_name, "invoice_date") or 
-                               get_actual_column_name(cursor, table_name, "date"))
-
-        if actual_invoice_date:
-            cursor.execute(f"""
-                SELECT DISTINCT YEAR({actual_invoice_date}) as yr 
-                FROM {table_name} 
-                WHERE {actual_invoice_date} IS NOT NULL 
-                ORDER BY yr ASC
-            """)
-            years = [int(r["yr"]) for r in cursor.fetchall() if r["yr"]]
-
-        return jsonify({
-            "status": "success",
-            "years": years
-        }), 200
-
-    except Exception as exc:
-        print(f"[Available Years] Database query failed: {exc}")
-        return jsonify({
-            "status": "error",
-            "message": "Database query failed.",
-            "details": str(exc)
-        }), 500
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn and conn.is_connected():
-            conn.close()
-
-
-
 
             

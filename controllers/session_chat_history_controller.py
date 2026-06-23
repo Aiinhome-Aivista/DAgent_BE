@@ -677,7 +677,7 @@ def get_chat_history(get_connection_func):
         # - Private persona queries (visit_number > 1) are strictly filtered by user_id
         # - If session_id starts with 'def_', it's fully shared
         cur.execute("""
-            SELECT id, visit_number, question, answer, follow_up_questions, visualizations
+            SELECT id, visit_number, question, answer, follow_up_questions, visualizations, created_at
             FROM session_chat_history
             WHERE session_id = %s AND (
                 user_id = %s 
@@ -709,7 +709,8 @@ def get_chat_history(get_connection_func):
                 "question": row["question"],
                 "answer": row["answer"],
                 "follow_up_questions": fuq,    
-                "visualizations": viz          
+                "visualizations": viz,
+                "created_at": row["created_at"].isoformat() if row.get("created_at") else None         
             })
 
         querySessions = []
