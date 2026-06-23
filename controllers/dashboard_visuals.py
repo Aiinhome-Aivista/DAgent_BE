@@ -1617,6 +1617,225 @@ def sales_by_zone_data_controller(get_db_connection):
 #         if conn and conn.is_connected():
 #             conn.close()
 
+# def year_wise_sales_comparison_controller(get_db_connection):
+#     """
+#     Fetches Year-wise Sales Comparison data grouped by month and year.
+#     Returns data in the format requested by the user:
+#     {
+#       "seriesKey": "year",
+#       "title": "Year-wise Sales Comparison",
+#       "type": "bar_chart",
+#       "xKey": "month",
+#       "yKey": "sales_value",
+#       "visualization": [
+#         { "month": "January",  "sales_value": 232010756.39, "year": "2026" }, ...
+#       ]
+#     }
+#     """
+#     data = request.get_json(force=True, silent=True)
+#     if not data:
+#         return jsonify({"error": "No data provided"}), 400
+        
+#     session_id = data.get("session_id", "")
+#     if not session_id:
+#         return jsonify({"error": "Missing session_id"}), 400
+
+#     def make_list(val):
+#         if val is None:
+#             return []
+#         if isinstance(val, list):
+#             return [v for v in val if v]
+#         return [val] if val else []
+
+#     selected_years = make_list(data.get("selected_years") or data.get("years") or data.get("year"))
+#     selected_zones = make_list(data.get("selected_zones") or data.get("zones") or data.get("Zone") or data.get("zone"))
+#     selected_regions = make_list(data.get("selected_regions") or data.get("regions") or data.get("Region") or data.get("region"))
+#     selected_months = make_list(data.get("selected_months") or data.get("months") or data.get("Month") or data.get("month"))
+#     selected_customer_types = make_list(data.get("selected_customer_types") or data.get("customer_types") or data.get("customer_type"))
+
+#     conn = None
+#     cursor = None
+#     visualization_data = []
+
+#     try:
+#         conn = get_db_connection()
+#         if not conn:
+#             return jsonify({"error": "Failed to connect to database."}), 500
+            
+#         cursor = conn.cursor(dictionary=True)
+
+#         # 1. Look up the dynamic table name and database from external_db_sync_log
+#         cursor.execute("""
+#             SELECT new_user_db, table_name 
+#             FROM external_db_sync_log 
+#             WHERE session_id=%s 
+#               AND new_user_db IS NOT NULL 
+#               AND new_user_db != ''
+#               AND table_name IS NOT NULL
+#             ORDER BY id DESC LIMIT 1
+#         """, (session_id,))
+#         sync_row = cursor.fetchone()
+
+#         if not sync_row:
+#             return jsonify({
+#                 "title": "Year-wise Sales Comparison",
+#                 "type": "bar_chart",
+#                 "xKey": "month",
+#                 "yKey": "sales_value",
+#                 "seriesKey": "year",
+#                 "visualization": visualization_data
+#             }), 200
+
+#         user_db = sync_row["new_user_db"]
+#         tbl_name = sync_row["table_name"]
+#         table_name = f"`{user_db}`.`{tbl_name}`"
+        
+#         cursor.execute(f"USE `{user_db}`")
+
+#         # Determine actual column names dynamically
+#         actual_invoice_date = (get_actual_column_name(cursor, table_name, "invoice_date") or 
+#                                get_actual_column_name(cursor, table_name, "date"))
+
+#         if not actual_invoice_date:
+#             return jsonify({
+#                 "seriesKey": "year",
+#                 "title": "Year-wise Sales Comparison",
+#                 "type": "bar_chart",
+#                 "xKey": "month",
+#                 "yKey": "sales_value",
+#                 "visualization": []
+#             }), 200
+
+#         actual_invoice_value = (get_actual_column_name(cursor, table_name, "invoice_value") or 
+#                                 get_actual_column_name(cursor, table_name, "taxable_value") or
+#                                 get_actual_column_name(cursor, table_name, "value"))
+
+#         if not actual_invoice_value:
+#             return jsonify({
+#                 "seriesKey": "year",
+#                 "title": "Year-wise Sales Comparison",
+#                 "type": "bar_chart",
+#                 "xKey": "month",
+#                 "yKey": "sales_value",
+#                 "visualization": []
+#             }), 200
+
+#         revenue_expr = f"""
+#             CAST(
+#                 REPLACE(TRIM({actual_invoice_value}), ',', '')
+#                 AS DECIMAL(18,2)
+#             )
+#         """
+
+#         where_clauses = [f"{actual_invoice_date} IS NOT NULL"]
+#         params = []
+
+#         # Years filter
+#         if selected_years:
+#             valid_years = []
+#             for y in selected_years:
+#                 if str(y).strip().lower() == "all":
+#                     continue
+#                 try:
+#                     valid_years.append(int(y))
+#                 except ValueError:
+#                     pass
+#             if valid_years:
+#                 placeholders = ",".join(["%s"] * len(valid_years))
+#                 where_clauses.append(f"YEAR({actual_invoice_date}) IN ({placeholders})")
+#                 params.extend(valid_years)
+
+#         # Months filter
+#         if selected_months:
+#             valid_months = [str(m).strip() for m in selected_months if m and str(m).strip().lower() != "all"]
+#             if valid_months:
+#                 placeholders = ",".join(["%s"] * len(valid_months))
+#                 where_clauses.append(f"MONTHNAME({actual_invoice_date}) IN ({placeholders})")
+#                 params.extend(valid_months)
+
+#         # Zone Filter
+#         actual_zone = get_actual_column_name(cursor, table_name, "zone")
+#         if actual_zone and selected_zones:
+#             valid_zones = [str(z).strip() for z in selected_zones if z and str(z).strip().lower() != "all"]
+#             if valid_zones:
+#                 placeholders = ",".join(["%s"] * len(valid_zones))
+#                 where_clauses.append(f"{actual_zone} IN ({placeholders})")
+#                 params.extend(valid_zones)
+
+#         # Region Filter
+#         actual_region = get_actual_column_name(cursor, table_name, "region")
+#         if actual_region and selected_regions:
+#             valid_regions = [str(r).strip() for r in selected_regions if r and str(r).strip().lower() != "all"]
+#             if valid_regions:
+#                 placeholders = ",".join(["%s"] * len(valid_regions))
+#                 where_clauses.append(f"{actual_region} IN ({placeholders})")
+#                 params.extend(valid_regions)
+
+#         # Customer Type Filter
+#         actual_customer_type = (get_actual_column_name(cursor, table_name, "customer_type") or 
+#                                 get_actual_column_name(cursor, table_name, "customer_category") or 
+#                                 get_actual_column_name(cursor, table_name, "cust_type") or 
+#                                 get_actual_column_name(cursor, table_name, "type"))
+#         if actual_customer_type and selected_customer_types:
+#             valid_types = [str(c).strip() for c in selected_customer_types if c and str(c).strip().lower() != "all"]
+#             if valid_types:
+#                 placeholders = ",".join(["%s"] * len(valid_types))
+#                 where_clauses.append(f"{actual_customer_type} IN ({placeholders})")
+#                 params.extend(valid_types)
+
+#         where_sql = " AND ".join(where_clauses)
+#         if where_sql:
+#             where_sql = "WHERE " + where_sql
+
+#         query = f"""
+#             SELECT 
+#                 MONTHNAME({actual_invoice_date}) AS month_name,
+#                 MONTH({actual_invoice_date}) AS month_num,
+#                 YEAR({actual_invoice_date}) AS year,
+#                 ROUND(SUM({revenue_expr}), 2) AS total_sales
+#             FROM {table_name}
+#             {where_sql}
+#             GROUP BY YEAR({actual_invoice_date}), MONTH({actual_invoice_date}), MONTHNAME({actual_invoice_date})
+#             ORDER BY year ASC, month_num ASC
+#         """
+        
+        
+#         cursor.execute(query, tuple(params))
+#         results = cursor.fetchall()
+
+#         for row in results:
+#             visualization_data.append({
+#                 "month": row["month_name"],
+#                 "sales_value": float(row["total_sales"] or 0),
+#                 "year": str(row["year"])
+#             })
+
+#         return jsonify({
+#             "seriesKey": "year",
+#             "title": "Year-wise Sales Comparison",
+#             "type": "bar_chart",
+#             "xKey": "month",
+#             "yKey": "sales_value",
+#             "visualization": visualization_data
+#         }), 200
+
+#     except Exception as exc:
+#         print(f"[Year-wise Sales Comparison] Database query failed: {exc}")
+#         return jsonify({
+#             "status": "error",
+#             "message": "Database query failed.",
+#             "details": str(exc)
+#         }), 500
+
+#     finally:
+#         if cursor:
+#             cursor.close()
+#         if conn and conn.is_connected():
+#             conn.close()
+
+#  new 
+
+
 def year_wise_sales_comparison_controller(get_db_connection):
     """
     Fetches Year-wise Sales Comparison data grouped by month and year.
@@ -1691,6 +1910,8 @@ def year_wise_sales_comparison_controller(get_db_connection):
         table_name = f"`{user_db}`.`{tbl_name}`"
         
         cursor.execute(f"USE `{user_db}`")
+        cursor.execute("SHOW TABLES")
+        tables = [list(r.values())[0] for r in cursor.fetchall()]
 
         # Determine actual column names dynamically
         actual_invoice_date = (get_actual_column_name(cursor, table_name, "invoice_date") or 
@@ -1720,14 +1941,59 @@ def year_wise_sales_comparison_controller(get_db_connection):
                 "visualization": []
             }), 200
 
+        # Fully qualify columns of table_name to avoid ambiguity in JOINs
+        actual_invoice_date_expr = f"{table_name}.{actual_invoice_date}"
+        actual_invoice_value_expr = f"{table_name}.{actual_invoice_value}"
+
         revenue_expr = f"""
             CAST(
-                REPLACE(TRIM({actual_invoice_value}), ',', '')
+                REPLACE(TRIM({actual_invoice_value_expr}), ',', '')
                 AS DECIMAL(18,2)
             )
         """
 
-        where_clauses = [f"{actual_invoice_date} IS NOT NULL"]
+        from_clause = table_name
+        actual_customer_type_expr = None
+
+        # Check if customer type column is directly in table_name
+        direct_customer_type = (get_actual_column_name(cursor, table_name, "customer_type") or 
+                                get_actual_column_name(cursor, table_name, "customer_category") or 
+                                get_actual_column_name(cursor, table_name, "cust_type") or 
+                                get_actual_column_name(cursor, table_name, "type"))
+
+        if direct_customer_type:
+            actual_customer_type_expr = f"{table_name}.{direct_customer_type}"
+        else:
+            # If not in table_name, look for another table that has it (e.g. customer table)
+            customer_tbl_name = None
+            actual_cust_category_col = None
+            for tbl in tables:
+                t_name = f"`{user_db}`.`{tbl}`"
+                if t_name == table_name:
+                    continue
+                col = (get_actual_column_name(cursor, t_name, "customer_type") or 
+                       get_actual_column_name(cursor, t_name, "customer_category") or 
+                       get_actual_column_name(cursor, t_name, "cust_type"))
+                if col:
+                    customer_tbl_name = t_name
+                    actual_cust_category_col = col
+                    break
+
+            if customer_tbl_name:
+                # Find linking columns
+                actual_inv_customer_col = (get_actual_column_name(cursor, table_name, "customer") or 
+                                           get_actual_column_name(cursor, table_name, "customer_id") or 
+                                           get_actual_column_name(cursor, table_name, "cust_no"))
+                                           
+                actual_cust_customer_col = (get_actual_column_name(cursor, customer_tbl_name, "customer") or 
+                                            get_actual_column_name(cursor, customer_tbl_name, "customer_id") or 
+                                            get_actual_column_name(cursor, customer_tbl_name, "cust_no"))
+
+                if actual_inv_customer_col and actual_cust_customer_col:
+                    from_clause = f"{table_name} JOIN {customer_tbl_name} ON {table_name}.{actual_inv_customer_col} = {customer_tbl_name}.{actual_cust_customer_col}"
+                    actual_customer_type_expr = f"{customer_tbl_name}.{actual_cust_category_col}"
+
+        where_clauses = [f"{actual_invoice_date_expr} IS NOT NULL"]
         params = []
 
         # Years filter
@@ -1742,7 +2008,7 @@ def year_wise_sales_comparison_controller(get_db_connection):
                     pass
             if valid_years:
                 placeholders = ",".join(["%s"] * len(valid_years))
-                where_clauses.append(f"YEAR({actual_invoice_date}) IN ({placeholders})")
+                where_clauses.append(f"YEAR({actual_invoice_date_expr}) IN ({placeholders})")
                 params.extend(valid_years)
 
         # Months filter
@@ -1750,7 +2016,7 @@ def year_wise_sales_comparison_controller(get_db_connection):
             valid_months = [str(m).strip() for m in selected_months if m and str(m).strip().lower() != "all"]
             if valid_months:
                 placeholders = ",".join(["%s"] * len(valid_months))
-                where_clauses.append(f"MONTHNAME({actual_invoice_date}) IN ({placeholders})")
+                where_clauses.append(f"MONTHNAME({actual_invoice_date_expr}) IN ({placeholders})")
                 params.extend(valid_months)
 
         # Zone Filter
@@ -1759,7 +2025,7 @@ def year_wise_sales_comparison_controller(get_db_connection):
             valid_zones = [str(z).strip() for z in selected_zones if z and str(z).strip().lower() != "all"]
             if valid_zones:
                 placeholders = ",".join(["%s"] * len(valid_zones))
-                where_clauses.append(f"{actual_zone} IN ({placeholders})")
+                where_clauses.append(f"{table_name}.{actual_zone} IN ({placeholders})")
                 params.extend(valid_zones)
 
         # Region Filter
@@ -1768,19 +2034,15 @@ def year_wise_sales_comparison_controller(get_db_connection):
             valid_regions = [str(r).strip() for r in selected_regions if r and str(r).strip().lower() != "all"]
             if valid_regions:
                 placeholders = ",".join(["%s"] * len(valid_regions))
-                where_clauses.append(f"{actual_region} IN ({placeholders})")
+                where_clauses.append(f"{table_name}.{actual_region} IN ({placeholders})")
                 params.extend(valid_regions)
 
         # Customer Type Filter
-        actual_customer_type = (get_actual_column_name(cursor, table_name, "customer_type") or 
-                                get_actual_column_name(cursor, table_name, "customer_category") or 
-                                get_actual_column_name(cursor, table_name, "cust_type") or 
-                                get_actual_column_name(cursor, table_name, "type"))
-        if actual_customer_type and selected_customer_types:
+        if actual_customer_type_expr and selected_customer_types:
             valid_types = [str(c).strip() for c in selected_customer_types if c and str(c).strip().lower() != "all"]
             if valid_types:
                 placeholders = ",".join(["%s"] * len(valid_types))
-                where_clauses.append(f"{actual_customer_type} IN ({placeholders})")
+                where_clauses.append(f"{actual_customer_type_expr} IN ({placeholders})")
                 params.extend(valid_types)
 
         where_sql = " AND ".join(where_clauses)
@@ -1789,13 +2051,13 @@ def year_wise_sales_comparison_controller(get_db_connection):
 
         query = f"""
             SELECT 
-                MONTHNAME({actual_invoice_date}) AS month_name,
-                MONTH({actual_invoice_date}) AS month_num,
-                YEAR({actual_invoice_date}) AS year,
+                MONTHNAME({actual_invoice_date_expr}) AS month_name,
+                MONTH({actual_invoice_date_expr}) AS month_num,
+                YEAR({actual_invoice_date_expr}) AS year,
                 ROUND(SUM({revenue_expr}), 2) AS total_sales
-            FROM {table_name}
+            FROM {from_clause}
             {where_sql}
-            GROUP BY YEAR({actual_invoice_date}), MONTH({actual_invoice_date}), MONTHNAME({actual_invoice_date})
+            GROUP BY YEAR({actual_invoice_date_expr}), MONTH({actual_invoice_date_expr}), MONTHNAME({actual_invoice_date_expr})
             ORDER BY year ASC, month_num ASC
         """
         
@@ -1831,6 +2093,7 @@ def year_wise_sales_comparison_controller(get_db_connection):
             cursor.close()
         if conn and conn.is_connected():
             conn.close()
+
 
 
 # available_years_controller
