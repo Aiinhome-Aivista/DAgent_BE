@@ -1726,11 +1726,11 @@ def year_wise_sales_comparison_controller(get_db_connection):
 
         where_clauses = [f"{actual_invoice_date_expr} IS NOT NULL"]
         params = []
-        print("CUSTOMER TABLE:", customer_tbl_name)
-        print("CUSTOMER TYPE COLUMN:", actual_customer_type_expr)
+        # print("CUSTOMER TABLE:", customer_tbl_name)
+        # print("CUSTOMER TYPE COLUMN:", actual_customer_type_expr)
 
-        print("FROM CLAUSE:")
-        print(from_clause)
+        # print("FROM CLAUSE:")
+        # print(from_clause)
         # Years filter
         if selected_years:
             valid_years = []
@@ -1811,20 +1811,20 @@ def year_wise_sales_comparison_controller(get_db_connection):
             ORDER BY year ASC, month_num ASC
         """
         
-        print("\n========== FINAL QUERY ==========")
-        print(query)
+        # print("\n========== FINAL QUERY ==========")
+        # print(query)
 
-        print("\n========== PARAMS ==========")
-        print(params)
+        # print("\n========== PARAMS ==========")
+        # print(params)
 
-        print("\n========== FACT TABLE ==========")
-        print(table_name)
+        # print("\n========== FACT TABLE ==========")
+        # print(table_name)
 
-        print("\n========== CUSTOMER TABLE ==========")
-        print(customer_tbl_name)
+        # print("\n========== CUSTOMER TABLE ==========")
+        # print(customer_tbl_name)
 
-        print("\n========== CUSTOMER TYPE ==========")
-        print(actual_customer_type_expr)
+        # print("\n========== CUSTOMER TYPE ==========")
+        # print(actual_customer_type_expr)
 
         cursor.execute(query, tuple(params))
         results = cursor.fetchall()
